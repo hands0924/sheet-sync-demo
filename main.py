@@ -1,111 +1,205 @@
 import os
 import json
-import requests
-from flask import Request, jsonify, abort
-from google.oauth2 import service_account
+import logging
 from google.cloud import firestore
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
+import hashlib
+import hmac
+import time
+import datetime
+import requests
+from dateutil import parser
 
-# ─── Environment Variables ─────────────────────────────────────────────────────
-# Set these via Cloud Function's "--set-env-vars" (or via GitHub Actions)
-SHEET_ID       = os.getenv("SHEET_ID")         # e.g. "1AbCdEfGhIjKlMnOpQrStUvWxYz"
-API_ENDPOINT   = os.getenv("API_ENDPOINT")     # e.g. "https://your.api/endpoint"
-FIRESTORE_DOC  = os.getenv("FIRESTORE_DOC")    # e.g. "sheet_snapshots/latest"
-# Path to the service account JSON key is provided by GOOGLE_APPLICATION_CREDENTIALS
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-if not (SHEET_ID and API_ENDPOINT and FIRESTORE_DOC):
-    raise EnvironmentError("One or more required env vars (SHEET_ID, API_ENDPOINT, FIRESTORE_DOC) are missing.")
+# 환경 변수
+SHEET_ID = os.environ.get("SHEET_ID")
+FIRESTORE_DOC = os.environ.get("FIRESTORE_DOC", "sheet_snapshots/latest")
+SOLAPI_API_KEY = os.environ.get("SOLAPI_API_KEY")
+SOLAPI_API_SECRET = os.environ.get("SOLAPI_API_SECRET")
+SENDER_PHONE = os.environ.get("SENDER_PHONE")
 
-# ─── Initialize Firestore client ────────────────────────────────────────────────
-# The Cloud Function runtime sets GOOGLE_APPLICATION_CREDENTIALS to the SA key automatically.
-firestore_client = firestore.Client()
-
-# ─── Initialize Sheets API client ───────────────────────────────────────────────
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-credentials = service_account.Credentials.from_service_account_file(
-    os.getenv("GOOGLE_APPLICATION_CREDENTIALS"), scopes=SCOPES
-)
-sheets_service = build("sheets", "v4", credentials=credentials)
-
-
-def sheet_webhook(request: Request):
-    """
-    Cloud Function triggered by a Drive push notification.
-    1) Validates the notification headers (optional).
-    2) Reads the entire Google Sheet.
-    3) Loads last snapshot from Firestore.
-    4) Compares and finds only new/changed rows.
-    5) Sends those rows (as a list) to the external API.
-    6) Writes the new snapshot back to Firestore.
-    """
-
-    # 1) Basic check: Ensure this is a Drive notification (check X-Goog-Resource-State)
-    resource_state = request.headers.get("X-Goog-Resource-State")
-    if resource_state not in ("update", "add"):
-        # Ignore other states like "exists", "sync", etc.
-        return ("Ignored notification", 200)
-
-    # 2) Fetch all values from the sheet
-    sheet_range = "Form Responses!A1:Z"  # Adjust columns as needed
+# Solapi API 서명 생성 함수
+def generate_solapi_signature(api_key, api_secret, timestamp):
     try:
-        sheet = sheets_service.spreadsheets().values().get(
-            spreadsheetId=SHEET_ID,
-            range=sheet_range
-        ).execute()
+        message = f"{api_key}:{timestamp}"
+        signature = hmac.new(
+            api_secret.encode('utf-8'),
+            message.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        return signature
     except Exception as e:
-        print("Error reading sheet:", e)
-        return abort(500, "Failed to read sheet")
+        logger.error(f"Solapi 서명 생성 실패: {str(e)}")
+        raise
 
-    all_values = sheet.get("values", [])
-    if len(all_values) < 2:
-        # Only header or no data
-        return jsonify({"status": "no data", "rows_total": 0})
-
-    header = all_values[0]         # E.g. ["Timestamp", "Name", "Email", ...]
-    data_rows = all_values[1:]     # All rows below header
-
-    # 3) Build a dictionary for current rows: { unique_id (timestamp) : {col:val, ...} }
-    current_dict = {}
-    for row in data_rows:
-        # Pad row to match header length if some cells are missing
-        row += [""] * (len(header) - len(row))
-        row_data = {header[i]: row[i] for i in range(len(header))}
-        unique_id = row[0]  # We assume column A ("Timestamp") is unique
-        current_dict[unique_id] = row_data
-
-    # 4) Load last snapshot from Firestore
-    doc_ref = firestore_client.document(FIRESTORE_DOC)
+# SMS 발송 함수
+def send_sms(phone, name, question_type):
     try:
-        previous_snapshot = doc_ref.get().to_dict() or {}
-    except Exception:
-        previous_snapshot = {}
-    prev_dict = previous_snapshot.get("snapshot", {})
+        timestamp = str(int(time.time() * 1000))
+        signature = generate_solapi_signature(SOLAPI_API_KEY, SOLAPI_API_SECRET, timestamp)
+        
+        url = "https://api.solapi.com/messages/v4/send"
+        headers = {
+            "Authorization": f"HMAC-SHA256 apiKey={SOLAPI_API_KEY}, date={timestamp}, salt={timestamp}, signature={signature}",
+            "Content-Type": "application/json"
+        }
+        
+        message = f"[{name}님의 문의]\n문의 종류: {question_type}\n문의가 접수되었습니다. 빠른 시일 내에 답변 드리겠습니다."
+        
+        payload = {
+            "message": {
+                "to": phone,
+                "from": SENDER_PHONE,
+                "text": message
+            }
+        }
+        
+        logger.info(f"SMS 발송 시도: {phone}, 이름: {name}, 문의 종류: {question_type}")
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        
+        logger.info(f"SMS 발송 성공: {phone}")
+        return True
+    except Exception as e:
+        logger.error(f"SMS 발송 실패: {str(e)}, 전화번호: {phone}")
+        return False
 
-    # 5) Compare and collect new/changed rows
-    changed_rows = []
-    for uid, row_data in current_dict.items():
-        prev_data = prev_dict.get(uid)
-        if prev_data is None or prev_data != row_data:
-            changed_rows.append(row_data)
+# Cloud Function의 진입점
+# 이 함수는 Google Cloud Functions에서 자동으로 호출됩니다.
+# 함수 이름은 Cloud Functions 배포 시 지정한 이름과 일치해야 합니다.
+def sheet_webhook(request):
+    """
+    Google Cloud Function의 진입점입니다.
+    
+    Args:
+        request: HTTP 요청 객체. Google Drive의 웹훅 알림을 포함합니다.
+        
+    Returns:
+        tuple: (응답 딕셔너리, HTTP 상태 코드)
+    """
+    try:
+        # 요청 로깅
+        logger.info("웹훅 요청 수신")
+        logger.debug(f"요청 헤더: {dict(request.headers)}")
+        
+        # 알림 유효성 검사
+        if request.headers.get("X-Goog-Resource-State") != "update":
+            logger.warning("유효하지 않은 리소스 상태")
+            return ({"status": "ignored", "message": "Not an update"}, 200)
 
-    # 6) Send changed rows to external API (only if there are any)
-    if changed_rows:
-        payload = {"rows": changed_rows}
+        # 서비스 계정 인증
         try:
-            resp = requests.post(API_ENDPOINT, json=payload, timeout=10)
-            resp.raise_for_status()
+            credentials = service_account.Credentials.from_service_account_info(
+                json.loads(os.environ.get("GCP_SA_KEY")),
+                scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+            )
+            service = build("sheets", "v4", credentials=credentials)
+            logger.info("Google Sheets API 인증 성공")
         except Exception as e:
-            print("Error sending to external API:", e)
-            # Even if API call fails, we still update Firestore snapshot below to avoid resending old rows in a loop.
+            logger.error(f"Google Sheets API 인증 실패: {str(e)}")
+            raise
 
-    # 7) Overwrite Firestore snapshot with current_dict
-    try:
-        doc_ref.set({"snapshot": current_dict})
+        # 시트 데이터 읽기
+        try:
+            result = service.spreadsheets().values().get(
+                spreadsheetId=SHEET_ID,
+                range="Form Responses!A1:Z"
+            ).execute()
+            rows = result.get("values", [])
+            logger.info(f"시트 데이터 읽기 성공: {len(rows)}행")
+        except Exception as e:
+            logger.error(f"시트 데이터 읽기 실패: {str(e)}")
+            raise
+
+        # Firestore 클라이언트 초기화
+        try:
+            db = firestore.Client()
+            logger.info("Firestore 클라이언트 초기화 성공")
+        except Exception as e:
+            logger.error(f"Firestore 클라이언트 초기화 실패: {str(e)}")
+            raise
+
+        # 이전 스냅샷 로드
+        try:
+            doc_ref = db.document(FIRESTORE_DOC)
+            doc = doc_ref.get()
+            previous_snapshot = doc.to_dict().get("snapshot", {}) if doc.exists else {}
+            logger.info("이전 스냅샷 로드 성공")
+        except Exception as e:
+            logger.error(f"이전 스냅샷 로드 실패: {str(e)}")
+            raise
+
+        # 현재 스냅샷 생성 및 비교
+        current_snapshot = {}
+        new_or_changed_rows = []
+        
+        for row in rows[1:]:  # 헤더 제외
+            if len(row) >= 10:  # 최소 10개 열 필요
+                timestamp = row[0]
+                current_snapshot[timestamp] = row
+                
+                if timestamp not in previous_snapshot or previous_snapshot[timestamp] != row:
+                    new_or_changed_rows.append(row)
+                    logger.info(f"새로운/변경된 행 발견: 타임스탬프 {timestamp}")
+
+        # SMS 발송
+        sms_results = []
+        for row in new_or_changed_rows:
+            try:
+                name = row[7]
+                phone = row[8]
+                question_type = row[9]
+                
+                success = send_sms(phone, name, question_type)
+                sms_results.append({
+                    "timestamp": row[0],
+                    "phone": phone,
+                    "success": success
+                })
+            except Exception as e:
+                logger.error(f"행 처리 중 오류 발생: {str(e)}, 행 데이터: {row}")
+                sms_results.append({
+                    "timestamp": row[0],
+                    "error": str(e)
+                })
+
+        # 새 스냅샷 저장
+        try:
+            doc_ref.set({"snapshot": current_snapshot})
+            logger.info("새 스냅샷 저장 성공")
+        except Exception as e:
+            logger.error(f"새 스냅샷 저장 실패: {str(e)}")
+            raise
+
+        # 결과 로깅
+        logger.info(f"처리 완료: {len(new_or_changed_rows)}개 행 처리, SMS 결과: {sms_results}")
+        
+        return ({
+            "status": "success",
+            "processed_rows": len(new_or_changed_rows),
+            "sms_results": sms_results
+        }, 200)
+
     except Exception as e:
-        print("Error writing snapshot to Firestore:", e)
+        logger.error(f"전체 처리 중 오류 발생: {str(e)}")
+        return ({
+            "status": "error",
+            "message": str(e)
+        }, 500)
 
-    return jsonify({
-        "status": "completed",
-        "rows_total": len(data_rows),
-        "rows_changed": len(changed_rows),
-    }) 
+# 로컬 테스트를 위한 코드
+# Cloud Functions에서는 이 부분이 실행되지 않습니다.
+if __name__ == "__main__":
+    # 테스트용 요청 객체 생성
+    class TestRequest:
+        def __init__(self):
+            self.headers = {"X-Goog-Resource-State": "update"}
+    
+    # 테스트 실행
+    response, status_code = sheet_webhook(TestRequest())
+    print(f"Status Code: {status_code}")
+    print(f"Response: {response}") 
