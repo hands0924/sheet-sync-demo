@@ -40,9 +40,12 @@ jobs:
           
           # 이전 배포 작업이 완료될 때까지 대기
           echo "이전 배포 작업이 완료될 때까지 대기 중..."
-          gcloud functions operations list --filter="operationType=CREATE_FUNCTION" --format="get(name)" | while read -r operation; do
-            if [ ! -z "$operation" ]; then
-              gcloud functions operations wait "$operation"
+          while true; do
+            if gcloud functions describe sheet_webhook --region=us-central1 --format="get(state)" 2>/dev/null | grep -q "DEPLOYING"; then
+              echo "이전 배포가 진행 중입니다. 30초 대기..."
+              sleep 30
+            else
+              break
             fi
           done
           
@@ -58,4 +61,15 @@ jobs:
           
           # 배포 상태 확인
           echo "배포 상태 확인 중..."
-          gcloud functions describe sheet_webhook --region=us-central1 --format="get(state)"
+          for i in {1..12}; do
+            state=$(gcloud functions describe sheet_webhook --region=us-central1 --format="get(state)")
+            if [ "$state" = "ACTIVE" ]; then
+              echo "배포가 성공적으로 완료되었습니다."
+              exit 0
+            fi
+            echo "배포 진행 중... ($i/12)"
+            sleep 10
+          done
+          
+          echo "배포 시간이 초과되었습니다. 최종 상태: $state"
+          exit 1
