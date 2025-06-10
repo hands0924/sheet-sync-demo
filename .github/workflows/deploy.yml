@@ -67,7 +67,7 @@ jobs:
           echo '{' > env.json
           echo '  "SHEET_ID": "'"${SHEET_ID}"'",' >> env.json
           echo '  "FIRESTORE_DOC": "'"${FIRESTORE_DOC}"'",' >> env.json
-          echo '  "GCP_SA_KEY": '"${{ secrets.GCP_SA_KEY }}" >> env.json
+          echo '  "GCP_SA_KEY": "'"$(echo "${{ secrets.GCP_SA_KEY }}" | sed 's/"/\\"/g')"'"' >> env.json
           
           # 선택적 환경 변수 추가
           if [ -n "${SOLAPI_API_KEY}" ]; then
