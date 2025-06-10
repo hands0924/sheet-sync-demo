@@ -46,4 +46,4 @@ jobs:
             --service-account=sheet-sync-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com \
             --region=us-central1 \
             --allow-unauthenticated \
-            --set-env-vars SHEET_ID=${{ secrets.SHEET_ID }},API_ENDPOINT=${{ secrets.API_ENDPOINT }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }} 
+            --set-env-vars SHEET_ID=${{ secrets.SHEET_ID }},API_ENDPOINT=${{ secrets.API_ENDPOINT }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }},GCP_SA_KEY=${{ secrets.GCP_SA_KEY }} 
