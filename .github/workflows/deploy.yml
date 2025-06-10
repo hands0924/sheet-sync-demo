@@ -37,7 +37,6 @@ jobs:
           GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           FIRESTORE_DOC: ${{ secrets.FIRESTORE_DOC }}
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SOLAPI_API_KEY: ${{ secrets.SOLAPI_API_KEY }}
           SOLAPI_API_SECRET: ${{ secrets.SOLAPI_API_SECRET }}
           SENDER_PHONE: ${{ secrets.SENDER_PHONE }}
@@ -64,11 +63,15 @@ jobs:
             fi
           done
           
+          # 서비스 계정 키 파일 생성
+          echo "${{ secrets.GCP_SA_KEY }}" > service-account.json
+          
           # 환경 변수 파일 생성
           cat > env.yaml << EOF
           SHEET_ID: "${SHEET_ID}"
           FIRESTORE_DOC: "${FIRESTORE_DOC}"
-          GCP_SA_KEY: '${GCP_SA_KEY}'
+          GCP_SA_KEY: |
+            $(cat service-account.json | sed 's/^/            /')
           EOF
           
           # 선택적 환경 변수 추가

@@ -32,6 +32,10 @@ SENDER_PHONE = os.environ.get("SENDER_PHONE")
 # 필수 환경 변수 검증
 if not all([SOLAPI_API_KEY, SOLAPI_API_SECRET, SENDER_PHONE]):
     logger.warning("SMS 발송에 필요한 환경 변수가 설정되지 않았습니다. SMS 기능이 비활성화됩니다.")
+    SMS_ENABLED = False
+else:
+    SMS_ENABLED = True
+    logger.info("SMS 발송 기능이 활성화되었습니다.")
 
 # GCP 서비스 계정 키 검증
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
@@ -60,7 +64,18 @@ def generate_solapi_signature(api_key, api_secret, timestamp):
 
 # SMS 발송 함수
 def send_sms(phone, name, question_type):
+    if not SMS_ENABLED:
+        logger.warning("SMS 기능이 비활성화되어 있습니다.")
+        return False
+        
     try:
+        # 전화번호 형식 검증
+        phone = phone.strip().replace("-", "")
+        if not phone.startswith("0"):
+            phone = "0" + phone
+        if not phone.isdigit() or len(phone) < 10:
+            raise ValueError(f"유효하지 않은 전화번호 형식: {phone}")
+            
         timestamp = str(int(time.time() * 1000))
         signature = generate_solapi_signature(SOLAPI_API_KEY, SOLAPI_API_SECRET, timestamp)
         
@@ -82,12 +97,23 @@ def send_sms(phone, name, question_type):
         
         logger.info(f"SMS 발송 시도: {phone}, 이름: {name}, 문의 종류: {question_type}")
         response = requests.post(url, headers=headers, json=payload)
+        
+        # 응답 상세 로깅
+        logger.info(f"Solapi 응답 상태 코드: {response.status_code}")
+        logger.info(f"Solapi 응답 내용: {response.text}")
+        
         response.raise_for_status()
         
         logger.info(f"SMS 발송 성공: {phone}")
         return True
+    except requests.exceptions.RequestException as e:
+        logger.error(f"SMS 발송 실패 (네트워크 오류): {str(e)}, 전화번호: {phone}")
+        return False
+    except ValueError as e:
+        logger.error(f"SMS 발송 실패 (유효성 검증 오류): {str(e)}")
+        return False
     except Exception as e:
-        logger.error(f"SMS 발송 실패: {str(e)}, 전화번호: {phone}")
+        logger.error(f"SMS 발송 실패 (기타 오류): {str(e)}, 전화번호: {phone}")
         return False
 
 # Cloud Function의 진입점
