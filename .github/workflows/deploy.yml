@@ -34,9 +34,9 @@ jobs:
 
       - name: Deploy to Cloud Functions
         run: |
-          # 인증 후 프로젝트 설정이 올바르게 되었는지 확인(Optional 디버그)
+          # 인증 후 프로젝트 설정이 올바르게 되었는지 확인
           gcloud config set project "${{ secrets.GCP_PROJECT }}"
-          gcloud auth list  # (선택) 현재 활성 계정 확인
+          gcloud auth list
           
           # 이전 배포 작업이 완료될 때까지 대기
           echo "이전 배포 작업이 완료될 때까지 대기 중..."
@@ -54,4 +54,8 @@ jobs:
             --service-account=sheet-sync-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com \
             --region=us-central1 \
             --allow-unauthenticated \
-            --set-env-vars SHEET_ID=${{ secrets.SHEET_ID }},API_ENDPOINT=${{ secrets.API_ENDPOINT }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }},GCP_SA_KEY=${{ secrets.GCP_SA_KEY }} 
+            --set-env-vars SHEET_ID=${{ secrets.SHEET_ID }},API_ENDPOINT=${{ secrets.API_ENDPOINT }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }},GCP_SA_KEY=${{ secrets.GCP_SA_KEY }}
+          
+          # 배포 상태 확인
+          echo "배포 상태 확인 중..."
+          gcloud functions describe sheet_webhook --region=us-central1 --format="get(state)"
