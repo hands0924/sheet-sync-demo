@@ -37,9 +37,17 @@ jobs:
           # 인증 후 프로젝트 설정이 올바르게 되었는지 확인(Optional 디버그)
           gcloud config set project "${{ secrets.GCP_PROJECT }}"
           gcloud auth list  # (선택) 현재 활성 계정 확인
+          
+          # 이전 배포 작업이 완료될 때까지 대기
+          echo "이전 배포 작업이 완료될 때까지 대기 중..."
+          gcloud functions operations list --filter="operationType=CREATE_FUNCTION" --format="get(name)" | while read -r operation; do
+            if [ ! -z "$operation" ]; then
+              gcloud functions operations wait "$operation"
+            fi
+          done
+          
           # 실제 배포
           gcloud functions deploy sheet_webhook \
-            --quiet \
             --runtime python310 \
             --trigger-http \
             --entry-point=sheet_webhook \
