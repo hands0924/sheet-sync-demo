@@ -34,23 +34,42 @@ jobs:
 
       - name: Deploy to Cloud Functions
         env:
-          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+          GCP_PROJECT: "prism-fin"  # 하드코딩된 프로젝트 ID
           SHEET_ID: ${{ secrets.SHEET_ID }}
           FIRESTORE_DOC: ${{ secrets.FIRESTORE_DOC }}
           SOLAPI_API_KEY: ${{ secrets.SOLAPI_API_KEY }}
           SOLAPI_API_SECRET: ${{ secrets.SOLAPI_API_SECRET }}
           SENDER_PHONE: ${{ secrets.SENDER_PHONE }}
         run: |
-          # 프로젝트 ID 확인
-          echo "현재 프로젝트 ID: ${GCP_PROJECT}"
-          gcloud projects describe "${GCP_PROJECT}" || {
-            echo "프로젝트 ID가 유효하지 않거나 접근할 수 없습니다."
+          # 프로젝트 ID 검증
+          if [ -z "${GCP_PROJECT}" ]; then
+            echo "Error: GCP_PROJECT 환경 변수가 설정되지 않았습니다."
             exit 1
-          }
+          fi
           
-          # 인증 후 프로젝트 설정이 올바르게 되었는지 확인
+          echo "현재 프로젝트 ID: ${GCP_PROJECT}"
+          
+          # 프로젝트 존재 여부 확인
+          if ! gcloud projects describe "${GCP_PROJECT}" > /dev/null 2>&1; then
+            echo "Error: 프로젝트 '${GCP_PROJECT}'가 존재하지 않거나 접근할 수 없습니다."
+            echo "사용 가능한 프로젝트 목록:"
+            gcloud projects list
+            exit 1
+          fi
+          
+          # 프로젝트 설정
+          echo "프로젝트 설정 중..."
           gcloud config set project "${GCP_PROJECT}"
+          
+          # 현재 인증된 계정 확인
+          echo "현재 인증된 계정:"
           gcloud auth list
+          
+          # 서비스 계정 권한 확인
+          echo "서비스 계정 권한 확인 중..."
+          if ! gcloud projects get-iam-policy "${GCP_PROJECT}" --format="table(bindings.role,bindings.members)" | grep -q "sheet-sync-sa@${GCP_PROJECT}.iam.gserviceaccount.com"; then
+            echo "Warning: 서비스 계정이 프로젝트에 대한 권한이 없을 수 있습니다."
+          fi
           
           # 이전 배포 작업이 완료될 때까지 대기
           echo "이전 배포 작업이 완료될 때까지 대기 중..."
@@ -91,8 +110,8 @@ jobs:
             --service-account=sheet-sync-sa@${GCP_PROJECT}.iam.gserviceaccount.com \
             --region=us-central1 \
             --allow-unauthenticated \
-            --memory=256MB \
-            --timeout=300s \
+            --memory=512MB \
+            --timeout=540s \
             --min-instances=0 \
             --max-instances=100 \
             --env-vars-file=env.json
