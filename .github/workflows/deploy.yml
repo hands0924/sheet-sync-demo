@@ -34,6 +34,13 @@ jobs:
 
       - name: Deploy to Cloud Functions
         run: |
+          # 프로젝트 ID 확인
+          echo "현재 프로젝트 ID: ${{ secrets.GCP_PROJECT }}"
+          gcloud projects describe "${{ secrets.GCP_PROJECT }}" || {
+            echo "프로젝트 ID가 유효하지 않거나 접근할 수 없습니다."
+            exit 1
+          }
+          
           # 인증 후 프로젝트 설정이 올바르게 되었는지 확인
           gcloud config set project "${{ secrets.GCP_PROJECT }}"
           gcloud auth list
@@ -49,6 +56,18 @@ jobs:
             fi
           done
           
+          # 환경 변수 설정
+          ENV_VARS="SHEET_ID=${{ secrets.SHEET_ID }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }},GCP_SA_KEY=${{ secrets.GCP_SA_KEY }}"
+          if [ ! -z "${{ secrets.SOLAPI_API_KEY }}" ]; then
+            ENV_VARS="$ENV_VARS,SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }}"
+          fi
+          if [ ! -z "${{ secrets.SOLAPI_API_SECRET }}" ]; then
+            ENV_VARS="$ENV_VARS,SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }}"
+          fi
+          if [ ! -z "${{ secrets.SENDER_PHONE }}" ]; then
+            ENV_VARS="$ENV_VARS,SENDER_PHONE=${{ secrets.SENDER_PHONE }}"
+          fi
+          
           # 실제 배포
           gcloud functions deploy sheet_webhook \
             --runtime python310 \
@@ -57,7 +76,11 @@ jobs:
             --service-account=sheet-sync-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com \
             --region=us-central1 \
             --allow-unauthenticated \
-            --set-env-vars SHEET_ID=${{ secrets.SHEET_ID }},API_ENDPOINT=${{ secrets.API_ENDPOINT }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }},GCP_SA_KEY=${{ secrets.GCP_SA_KEY }}
+            --memory=256MB \
+            --timeout=60s \
+            --min-instances=0 \
+            --max-instances=100 \
+            --set-env-vars "$ENV_VARS"
           
           # 배포 상태 확인
           echo "배포 상태 확인 중..."
