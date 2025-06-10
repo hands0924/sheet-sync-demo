@@ -95,8 +95,7 @@ jobs:
             --timeout=300s \
             --min-instances=0 \
             --max-instances=100 \
-            --env-vars-file=env.json \
-            --set-build-env-vars GOOGLE_FUNCTION_TARGET=sheet_webhook
+            --env-vars-file=env.json
           
           # 배포 상태 확인
           echo "배포 상태 확인 중..."
