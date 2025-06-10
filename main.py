@@ -11,13 +11,18 @@ import datetime
 import requests
 from dateutil import parser
 from dotenv import load_dotenv
-#
+import flask
+from flask import Flask, request, jsonify
+
 # .env 파일 로드 (로컬 개발 환경에서만 사용)
 load_dotenv()
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Flask 앱 초기화
+app = Flask(__name__)
 
 # 환경 변수
 SHEET_ID = os.environ.get("SHEET_ID")
@@ -119,18 +124,10 @@ def send_sms(phone, name, question_type):
         logger.error(f"SMS 발송 실패 (기타 오류): {str(e)}, 전화번호: {phone}")
         return False
 
-# Cloud Function의 진입점
-# 이 함수는 Google Cloud Functions에서 자동으로 호출됩니다.
-# 함수 이름은 Cloud Functions 배포 시 지정한 이름과 일치해야 합니다.
-def sheet_webhook(request):
+@app.route("/", methods=["POST"])
+def sheet_webhook():
     """
     Google Cloud Function의 진입점입니다.
-    
-    Args:
-        request: HTTP 요청 객체. Google Drive의 웹훅 알림을 포함합니다.
-        
-    Returns:
-        tuple: (응답 딕셔너리, HTTP 상태 코드)
     """
     try:
         # 요청 로깅
@@ -147,7 +144,7 @@ def sheet_webhook(request):
         # 알림 유효성 검사
         if request.headers.get("X-Goog-Resource-State") != "update":
             logger.warning("유효하지 않은 리소스 상태")
-            return ({"status": "ignored", "message": "Not an update"}, 200)
+            return jsonify({"status": "ignored", "message": "Not an update"}), 200
 
         # 서비스 계정 인증
         try:
@@ -236,28 +233,20 @@ def sheet_webhook(request):
         # 결과 로깅
         logger.info(f"처리 완료: {len(new_or_changed_rows)}개 행 처리, SMS 결과: {sms_results}")
         
-        return ({
+        return jsonify({
             "status": "success",
             "processed_rows": len(new_or_changed_rows),
             "sms_results": sms_results
-        }, 200)
+        }), 200
 
     except Exception as e:
         logger.error(f"전체 처리 중 오류 발생: {str(e)}")
-        return ({
+        return jsonify({
             "status": "error",
             "message": str(e)
-        }, 500)
+        }), 500
 
 # 로컬 테스트를 위한 코드
-# Cloud Functions에서는 이 부분이 실행되지 않습니다.
 if __name__ == "__main__":
-    # 테스트용 요청 객체 생성
-    class TestRequest:
-        def __init__(self):
-            self.headers = {"X-Goog-Resource-State": "update"}
-    
-    # 테스트 실행
-    response, status_code = sheet_webhook(TestRequest())
-    print(f"Status Code: {status_code}")
-    print(f"Response: {response}") 
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port) 

@@ -1,7 +1,7 @@
-Flask==2.3.2
-google-api-python-client==2.99.0
-google-auth==2.23.0
-google-cloud-firestore==2.15.0
+Flask==3.0.0
+google-api-python-client==2.97.0
+google-auth==2.22.0
+google-cloud-firestore==2.11.1
 requests==2.31.0
 python-dateutil==2.8.2
 python-dotenv==1.0.0 
