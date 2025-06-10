@@ -1,4 +1,4 @@
-Flask==3.0.0
+Flask>=1.0,<3.0
 google-api-python-client==2.97.0
 google-auth==2.22.0
 google-cloud-firestore==2.11.1
