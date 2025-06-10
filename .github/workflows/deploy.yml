@@ -63,27 +63,27 @@ jobs:
             fi
           done
           
-          # 서비스 계정 키 파일 생성
-          echo "${{ secrets.GCP_SA_KEY }}" > service-account.json
-          
-          # 환경 변수 파일 생성
-          cat > env.yaml << EOF
-          SHEET_ID: "${SHEET_ID}"
-          FIRESTORE_DOC: "${FIRESTORE_DOC}"
-          GCP_SA_KEY: |
-            $(cat service-account.json | sed 's/^/            /')
+          # 환경 변수 파일 생성 (JSON 형식 사용)
+          cat > env.json << EOF
+          {
+            "SHEET_ID": "${SHEET_ID}",
+            "FIRESTORE_DOC": "${FIRESTORE_DOC}",
+            "GCP_SA_KEY": ${{ secrets.GCP_SA_KEY }}
           EOF
           
           # 선택적 환경 변수 추가
           if [ -n "${SOLAPI_API_KEY}" ]; then
-            echo "SOLAPI_API_KEY: \"${SOLAPI_API_KEY}\"" >> env.yaml
+            echo ",\"SOLAPI_API_KEY\": \"${SOLAPI_API_KEY}\"" >> env.json
           fi
           if [ -n "${SOLAPI_API_SECRET}" ]; then
-            echo "SOLAPI_API_SECRET: \"${SOLAPI_API_SECRET}\"" >> env.yaml
+            echo ",\"SOLAPI_API_SECRET\": \"${SOLAPI_API_SECRET}\"" >> env.json
           fi
           if [ -n "${SENDER_PHONE}" ]; then
-            echo "SENDER_PHONE: \"${SENDER_PHONE}\"" >> env.yaml
+            echo ",\"SENDER_PHONE\": \"${SENDER_PHONE}\"" >> env.json
           fi
+          
+          # JSON 파일 닫기
+          echo "}" >> env.json
           
           # 실제 배포
           gcloud functions deploy sheet_webhook \
@@ -97,7 +97,7 @@ jobs:
             --timeout=60s \
             --min-instances=0 \
             --max-instances=100 \
-            --env-vars-file=env.yaml
+            --set-env-vars-file=env.json
           
           # 배포 상태 확인
           echo "배포 상태 확인 중..."
