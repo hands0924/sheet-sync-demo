@@ -10,17 +10,39 @@ import time
 import datetime
 import requests
 from dateutil import parser
+from dotenv import load_dotenv
 #
+# .env 파일 로드 (로컬 개발 환경에서만 사용)
+load_dotenv()
+
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 환경 변수
 SHEET_ID = os.environ.get("SHEET_ID")
+if not SHEET_ID:
+    raise ValueError("SHEET_ID 환경 변수가 설정되지 않았습니다.")
+
 FIRESTORE_DOC = os.environ.get("FIRESTORE_DOC", "sheet_snapshots/latest")
 SOLAPI_API_KEY = os.environ.get("SOLAPI_API_KEY")
 SOLAPI_API_SECRET = os.environ.get("SOLAPI_API_SECRET")
 SENDER_PHONE = os.environ.get("SENDER_PHONE")
+
+# 필수 환경 변수 검증
+if not all([SOLAPI_API_KEY, SOLAPI_API_SECRET, SENDER_PHONE]):
+    logger.warning("SMS 발송에 필요한 환경 변수가 설정되지 않았습니다. SMS 기능이 비활성화됩니다.")
+
+# GCP 서비스 계정 키 검증
+GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
+if not GCP_SA_KEY:
+    raise ValueError("GCP_SA_KEY 환경 변수가 설정되지 않았습니다.")
+
+try:
+    # 서비스 계정 키가 유효한 JSON인지 미리 검증
+    sa_key_json = json.loads(GCP_SA_KEY)
+except json.JSONDecodeError as e:
+    raise ValueError(f"GCP_SA_KEY가 유효한 JSON 형식이 아닙니다: {str(e)}")
 
 # Solapi API 서명 생성 함수
 def generate_solapi_signature(api_key, api_secret, timestamp):
@@ -94,7 +116,7 @@ def sheet_webhook(request):
         # 서비스 계정 인증
         try:
             credentials = service_account.Credentials.from_service_account_info(
-                json.loads(os.environ.get("GCP_SA_KEY")),
+                sa_key_json,  # 미리 검증된 JSON 사용
                 scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
             )
             service = build("sheets", "v4", credentials=credentials)
