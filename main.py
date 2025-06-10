@@ -11,7 +11,7 @@ import datetime
 import requests
 from dateutil import parser
 from dotenv import load_dotenv
-import flask
+import functions_framework
 from flask import Flask, request, jsonify
 
 # .env 파일 로드 (로컬 개발 환경에서만 사용)
@@ -20,9 +20,6 @@ load_dotenv()
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Flask 앱 초기화
-app = Flask(__name__)
 
 # 환경 변수
 SHEET_ID = os.environ.get("SHEET_ID")
@@ -124,8 +121,8 @@ def send_sms(phone, name, question_type):
         logger.error(f"SMS 발송 실패 (기타 오류): {str(e)}, 전화번호: {phone}")
         return False
 
-@app.route("/", methods=["POST"])
-def sheet_webhook():
+@functions_framework.http
+def sheet_webhook(request):
     """
     Google Cloud Function의 진입점입니다.
     """
@@ -248,5 +245,8 @@ def sheet_webhook():
 
 # 로컬 테스트를 위한 코드
 if __name__ == "__main__":
+    import flask
+    app = flask.Flask(__name__)
+    app.add_url_rule("/", "sheet_webhook", sheet_webhook, methods=["POST"])
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port) 
