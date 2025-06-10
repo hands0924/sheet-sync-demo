@@ -10,7 +10,7 @@ import time
 import datetime
 import requests
 from dateutil import parser
-
+#
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
