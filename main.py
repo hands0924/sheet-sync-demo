@@ -45,7 +45,10 @@ if not GCP_SA_KEY:
 try:
     # 서비스 계정 키가 유효한 JSON인지 미리 검증
     sa_key_json = json.loads(GCP_SA_KEY)
+    logger.info("GCP_SA_KEY가 유효한 JSON 형식입니다.")
 except json.JSONDecodeError as e:
+    logger.error(f"GCP_SA_KEY JSON 파싱 실패: {str(e)}")
+    logger.error(f"GCP_SA_KEY 값: {GCP_SA_KEY[:100]}...")  # 처음 100자만 로깅
     raise ValueError(f"GCP_SA_KEY가 유효한 JSON 형식이 아닙니다: {str(e)}")
 
 # Solapi API 서명 생성 함수
@@ -132,7 +135,14 @@ def sheet_webhook(request):
     try:
         # 요청 로깅
         logger.info("웹훅 요청 수신")
-        logger.debug(f"요청 헤더: {dict(request.headers)}")
+        logger.info(f"요청 헤더: {dict(request.headers)}")
+        logger.info(f"요청 메서드: {request.method}")
+        logger.info(f"요청 URL: {request.url}")
+        
+        # 환경 변수 로깅 (민감 정보 제외)
+        logger.info(f"SHEET_ID 설정됨: {bool(SHEET_ID)}")
+        logger.info(f"FIRESTORE_DOC 설정됨: {bool(FIRESTORE_DOC)}")
+        logger.info(f"SMS 기능 활성화: {SMS_ENABLED}")
         
         # 알림 유효성 검사
         if request.headers.get("X-Goog-Resource-State") != "update":
