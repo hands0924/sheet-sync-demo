@@ -22,20 +22,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Set up Google Cloud SDK
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: "${{ secrets.GCP_SA_KEY }}"  # 서비스 계정 키 JSON을 GitHub Secrets에 저장해두었을 때
+      - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v1
         with:
-          project_id: ${{ secrets.GCP_PROJECT }}
-          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: "${{ secrets.GCP_PROJECT }}"      # GCP 프로젝트 ID
+          # service_account_key는 제거합니다. :contentReference[oaicite:0]{index=0}
 
       - name: Deploy to Cloud Functions
         run: |
+          # 인증 후 프로젝트 설정이 올바르게 되었는지 확인(Optional 디버그)
+          gcloud config set project "${{ secrets.GCP_PROJECT }}"
+          gcloud auth list  # (선택) 현재 활성 계정 확인
+          # 실제 배포
           gcloud functions deploy sheet_webhook \
             --quiet \
             --runtime python310 \
             --trigger-http \
-            --entry-point sheet_webhook \
-            --service-account sheet-sync-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com \
-            --region us-central1 \
+            --entry-point=sheet_webhook \
+            --service-account=sheet-sync-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com \
+            --region=us-central1 \
             --allow-unauthenticated \
             --set-env-vars SHEET_ID=${{ secrets.SHEET_ID }},API_ENDPOINT=${{ secrets.API_ENDPOINT }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }} 
