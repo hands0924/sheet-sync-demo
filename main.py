@@ -8,7 +8,6 @@ from google.cloud import firestore
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import requests
-from dateutil import parser
 import functions_framework
 from flask import jsonify, Request
 
@@ -16,12 +15,7 @@ from flask import jsonify, Request
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 환경 변수 로드
-# Cloud Functions 환경에서는 load_dotenv가 필요 없으나, 로컬 테스트 시 .env를 사용할 수 있음
-# from dotenv import load_dotenv
-# load_dotenv()
-
-# 필수 환경 변수
+# 환경 변수 로드 (Cloud Functions 환경에서는 .env 불필요)
 SHEET_ID = os.environ.get("SHEET_ID")
 if not SHEET_ID:
     raise ValueError("SHEET_ID 환경 변수가 설정되지 않았습니다.")
@@ -39,57 +33,46 @@ else:
     SMS_ENABLED = True
     logger.info("SMS 발송 기능이 활성화되었습니다.")
 
-# GCP 서비스 계정 키 (JSON 문자열 형태)
+# GCP 서비스 계정 키 (Sheets API용 JSON 문자열 형태)
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
 if not GCP_SA_KEY:
-    raise ValueError("GCP_SA_KEY 환경 변수가 설정되지 않았습니다.")
-
-# 서비스 계정 JSON 로드 및 검증
-try:
-    sa_key_json = json.loads(GCP_SA_KEY)
-    logger.info("GCP_SA_KEY가 유효한 JSON 형식입니다.")
-except json.JSONDecodeError as e:
-    logger.error(f"GCP_SA_KEY JSON 파싱 실패: {e}")
-    raise
-
-# 프로젝트 ID 결정
-# JSON 내부 project_id 우선, 없으면 환경변수 GOOGLE_CLOUD_PROJECT 사용
-project_id = sa_key_json.get("project_id") or os.environ.get("GOOGLE_CLOUD_PROJECT")
-if not project_id:
-    raise ValueError("프로젝트 ID를 결정할 수 없습니다. 서비스 계정 JSON의 project_id 또는 GOOGLE_CLOUD_PROJECT 환경 변수를 설정하세요.")
-logger.info(f"Firestore 및 API 호출에 사용할 프로젝트 ID: {project_id}")
-
-# 서비스 계정 Credentials 객체 생성
-try:
-    # Firestore와 Sheets API에 필요한 스코프 설정
-    scopes = [
-        "https://www.googleapis.com/auth/datastore",
-        "https://www.googleapis.com/auth/spreadsheets.readonly"
-    ]
-    credentials = service_account.Credentials.from_service_account_info(sa_key_json, scopes=scopes)
-    logger.info("서비스 계정 Credentials 생성 성공")
-except Exception as e:
-    logger.error(f"서비스 계정 Credentials 생성 실패: {e}")
-    raise
-
-# Firestore 클라이언트 초기화
-def get_firestore_client():
+    logger.info("GCP_SA_KEY 환경 변수가 설정되지 않았습니다. 로컬 테스트가 아닌 경우 기본 애플리케이션 자격증명 사용")
+    sa_key_json = None
+else:
     try:
-        client = firestore.Client(project=project_id, credentials=credentials)
-        logger.info("Firestore 클라이언트 초기화 성공")
-        return client
-    except Exception as e:
-        logger.error(f"Firestore 클라이언트 초기화 실패: {e}")
-        raise
+        sa_key_json = json.loads(GCP_SA_KEY)
+        logger.info("GCP_SA_KEY가 유효한 JSON 형식입니다.")
+    except json.JSONDecodeError as e:
+        logger.error(f"GCP_SA_KEY JSON 파싱 실패: {e}")
+        sa_key_json = None
 
 # Sheets API 클라이언트 초기화
 def get_sheets_service():
     try:
-        service = build("sheets", "v4", credentials=credentials)
+        if sa_key_json:
+            credentials = service_account.Credentials.from_service_account_info(
+                sa_key_json,
+                scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+            )
+            service = build("sheets", "v4", credentials=credentials)
+        else:
+            # 기본 애플리케이션 자격증명 사용
+            service = build("sheets", "v4")
         logger.info("Google Sheets API 클라이언트 초기화 성공")
         return service
     except Exception as e:
         logger.error(f"Google Sheets API 초기화 실패: {e}")
+        raise
+
+# Firestore 클라이언트 초기화
+def get_firestore_client():
+    try:
+        # Cloud Functions 환경에서는 기본 애플리케이션 자격증명을 사용
+        client = firestore.Client()
+        logger.info("Firestore 클라이언트 초기화 성공 (ADC)")
+        return client
+    except Exception as e:
+        logger.error(f"Firestore 클라이언트 초기화 실패: {e}")
         raise
 
 # Solapi 서명 생성
@@ -133,20 +116,18 @@ def send_sms(phone, name, question_type):
 def sheet_webhook(request: Request):
     try:
         logger.info("웹훅 요청 수신")
-        # 헤더 검사
         resource_state = request.headers.get("X-Goog-Resource-State")
         logger.info(f"X-Goog-Resource-State: {resource_state}")
         if resource_state != "update":
             logger.warning("유효하지 않은 리소스 상태, 처리 생략")
             return jsonify({"status": "ignored", "message": "Not an update"}), 200
 
-        # Sheets API 클라이언트
+        # Sheets API 호출
         try:
             sheets_service = get_sheets_service()
         except Exception as e:
             return jsonify({"status": "error", "message": "Sheets API 초기화 실패", "details": str(e)}), 500
 
-        # 시트 읽기
         try:
             result = sheets_service.spreadsheets().values().get(spreadsheetId=SHEET_ID, range="Form Responses!A1:Z").execute()
             rows = result.get("values", [])
@@ -214,3 +195,17 @@ def sheet_webhook(request: Request):
     except Exception as e:
         logger.error(f"전체 처리 중 예외: {e}")
         return jsonify({"status": "error", "message": "처리 중 오류 발생", "details": str(e)}), 500
+
+# 로컬 테스트 진입점
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    from dotenv import load_dotenv
+    load_dotenv()
+    logger.info("로컬에서 Flask로 실행")
+    from flask import Flask
+    app = Flask(__name__)
+    @app.route("/", methods=["POST"])
+    def local_handler():
+        from flask import request
+        return sheet_webhook(request)
+    app.run(host="0.0.0.0", port=port)
