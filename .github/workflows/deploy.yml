@@ -25,16 +25,16 @@ jobs:
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v1
         with:
-          credentials_json: "${{ secrets.GCP_SA_KEY }}"  # 서비스 계정 키 JSON을 GitHub Secrets에 저장해두었을 때
+          credentials_json: "${{ secrets.GCP_SA_KEY }}"
+
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v1
         with:
-          project_id: "${{ secrets.GCP_PROJECT }}"      # GCP 프로젝트 ID
-          # service_account_key는 제거합니다. :contentReference[oaicite:0]{index=0}
+          project_id: "${{ secrets.GCP_PROJECT }}"
 
       - name: Deploy to Cloud Functions
         env:
-          GCP_PROJECT: "prism-fin"
+          GCP_PROJECT: "${{ secrets.GCP_PROJECT }}"
           SHEET_ID: ${{ secrets.SHEET_ID }}
           FIRESTORE_DOC: ${{ secrets.FIRESTORE_DOC }}
           SOLAPI_API_KEY: ${{ secrets.SOLAPI_API_KEY }}
@@ -86,7 +86,7 @@ jobs:
           echo '{' > env.json
           echo '  "SHEET_ID": "'"${SHEET_ID}"'",' >> env.json
           echo '  "FIRESTORE_DOC": "'"${FIRESTORE_DOC}"'",' >> env.json
-          echo '  "GCP_SA_KEY": "'"$(echo "${{ secrets.GCP_SA_KEY }}" | sed 's/"/\\"/g')"'"' >> env.json
+          echo '  "GCP_SA_KEY": '"${{ secrets.GCP_SA_KEY }}" >> env.json
           
           # 선택적 환경 변수 추가
           if [ -n "${SOLAPI_API_KEY}" ]; then

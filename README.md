@@ -3,7 +3,7 @@
 이 프로젝트는 Google Sheet(폼 응답)의 변경사항을 **1분 미만의 실시간으로 감지**하여 **Solapi API**를 통해 SMS를 발송하는 서버리스 시스템입니다. **Drive 푸시 알림**과 **Python Cloud Function**을 사용하며, **Firestore**에 마지막 스냅샷을 저장합니다.
 
 ---
-
+å
 ## 저장소 구조
 
 sheet-sync-demo/

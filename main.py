@@ -1,9 +1,11 @@
 import os
+import json
 import logging
 import hashlib
 import hmac
 import time
 from google.cloud import firestore
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import requests
 import functions_framework
@@ -30,17 +32,6 @@ if not all([SOLAPI_API_KEY, SOLAPI_API_SECRET, SENDER_PHONE]):
 else:
     SMS_ENABLED = True
     logger.info("SMS 발송 기능 활성화됨")
-
-# Optional: 로컬 테스트용으로 GCP_SA_KEY를 받아 JSON 파싱하려는 경우
-# GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
-# if GCP_SA_KEY:
-#     try:
-#         sa_key_json = json.loads(GCP_SA_KEY)
-#     except:
-#         logger.warning("GCP_SA_KEY JSON 파싱 실패; ADC 사용 모드로 전환")
-#         sa_key_json = None
-# else:
-#     sa_key_json = None
 
 # GCP 서비스 계정 키 (Sheets API용 JSON 문자열 형태)
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
