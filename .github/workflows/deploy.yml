@@ -34,7 +34,7 @@ jobs:
 
       - name: Deploy to Cloud Functions
         env:
-          GCP_PROJECT: "prism-fin"  # 하드코딩된 프로젝트 ID
+          GCP_PROJECT: "prism-fin"
           SHEET_ID: ${{ secrets.SHEET_ID }}
           FIRESTORE_DOC: ${{ secrets.FIRESTORE_DOC }}
           SOLAPI_API_KEY: ${{ secrets.SOLAPI_API_KEY }}
@@ -86,7 +86,7 @@ jobs:
           echo '{' > env.json
           echo '  "SHEET_ID": "'"${SHEET_ID}"'",' >> env.json
           echo '  "FIRESTORE_DOC": "'"${FIRESTORE_DOC}"'",' >> env.json
-          echo '  "GCP_SA_KEY": "'"$(echo "${{ secrets.GCP_SA_KEY }}" | sed 's/"/\\"/g')"'"' >> env.json
+          echo '  "GCP_SA_KEY": '"${{ secrets.GCP_SA_KEY }}" >> env.json
           
           # 선택적 환경 변수 추가
           if [ -n "${SOLAPI_API_KEY}" ]; then
@@ -104,6 +104,7 @@ jobs:
           
           # 실제 배포
           gcloud functions deploy sheet_webhook \
+            --project="${GCP_PROJECT}" \
             --runtime python310 \
             --trigger-http \
             --entry-point=sheet_webhook \
