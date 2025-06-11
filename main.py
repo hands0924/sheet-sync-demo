@@ -156,7 +156,11 @@ def sheet_webhook():
             logger.info("Google Sheets API 인증 성공")
         except Exception as e:
             logger.error(f"Google Sheets API 인증 실패: {str(e)}")
-            raise
+            return jsonify({
+                "status": "error",
+                "message": "Google Sheets API 인증 실패",
+                "details": str(e)
+            }), 500
 
         # 시트 데이터 읽기
         try:
@@ -165,10 +169,20 @@ def sheet_webhook():
                 range="Form Responses!A1:Z"
             ).execute()
             rows = result.get("values", [])
+            if not rows:
+                logger.warning("시트에 데이터가 없습니다.")
+                return jsonify({
+                    "status": "warning",
+                    "message": "No data in sheet"
+                }), 200
             logger.info(f"시트 데이터 읽기 성공: {len(rows)}행")
         except Exception as e:
             logger.error(f"시트 데이터 읽기 실패: {str(e)}")
-            raise
+            return jsonify({
+                "status": "error",
+                "message": "시트 데이터 읽기 실패",
+                "details": str(e)
+            }), 500
 
         # Firestore 클라이언트 초기화
         try:
@@ -176,7 +190,11 @@ def sheet_webhook():
             logger.info("Firestore 클라이언트 초기화 성공")
         except Exception as e:
             logger.error(f"Firestore 클라이언트 초기화 실패: {str(e)}")
-            raise
+            return jsonify({
+                "status": "error",
+                "message": "Firestore 클라이언트 초기화 실패",
+                "details": str(e)
+            }), 500
 
         # 이전 스냅샷 로드
         try:
@@ -186,7 +204,11 @@ def sheet_webhook():
             logger.info("이전 스냅샷 로드 성공")
         except Exception as e:
             logger.error(f"이전 스냅샷 로드 실패: {str(e)}")
-            raise
+            return jsonify({
+                "status": "error",
+                "message": "이전 스냅샷 로드 실패",
+                "details": str(e)
+            }), 500
 
         # 현재 스냅샷 생성 및 비교
         current_snapshot = {}
@@ -200,6 +222,8 @@ def sheet_webhook():
                 if timestamp not in previous_snapshot or previous_snapshot[timestamp] != row:
                     new_or_changed_rows.append(row)
                     logger.info(f"새로운/변경된 행 발견: 타임스탬프 {timestamp}")
+            else:
+                logger.warning(f"유효하지 않은 행 형식: {row}")
 
         # SMS 발송
         sms_results = []
@@ -228,7 +252,11 @@ def sheet_webhook():
             logger.info("새 스냅샷 저장 성공")
         except Exception as e:
             logger.error(f"새 스냅샷 저장 실패: {str(e)}")
-            raise
+            return jsonify({
+                "status": "error",
+                "message": "새 스냅샷 저장 실패",
+                "details": str(e)
+            }), 500
 
         # 결과 로깅
         logger.info(f"처리 완료: {len(new_or_changed_rows)}개 행 처리, SMS 결과: {sms_results}")
@@ -243,7 +271,8 @@ def sheet_webhook():
         logger.error(f"전체 처리 중 오류 발생: {str(e)}")
         return jsonify({
             "status": "error",
-            "message": str(e)
+            "message": "처리 중 오류 발생",
+            "details": str(e)
         }), 500
 
 @functions_framework.http
