@@ -21,6 +21,9 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Flask 앱 초기화
+app = Flask(__name__)
+
 # 환경 변수
 SHEET_ID = os.environ.get("SHEET_ID")
 if not SHEET_ID:
@@ -121,8 +124,8 @@ def send_sms(phone, name, question_type):
         logger.error(f"SMS 발송 실패 (기타 오류): {str(e)}, 전화번호: {phone}")
         return False
 
-@functions_framework.http
-def sheet_webhook(request):
+@app.route("/", methods=["POST"])
+def sheet_webhook():
     """
     Google Cloud Function의 진입점입니다.
     """
@@ -243,10 +246,14 @@ def sheet_webhook(request):
             "message": str(e)
         }), 500
 
+@functions_framework.http
+def entry_point(request):
+    """
+    Cloud Functions 진입점
+    """
+    return app(request.environ, lambda status, headers, exc_info=None: None)
+
 # 로컬 테스트를 위한 코드
 if __name__ == "__main__":
-    import flask
-    app = flask.Flask(__name__)
-    app.add_url_rule("/", "sheet_webhook", sheet_webhook, methods=["POST"])
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port) 
