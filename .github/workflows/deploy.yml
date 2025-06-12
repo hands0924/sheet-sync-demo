@@ -59,10 +59,4 @@ jobs:
           --image gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG \
           --region $REGION \
           --allow-unauthenticated \
-          --set-env-vars="SPREADSHEET_ID=${{ secrets.SPREADSHEET_ID }}" \
-          --set-env-vars="SHEET_NAME=${{ secrets.SHEET_NAME }}" \
-          --set-env-vars="SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }}" \
-          --set-env-vars="SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }}" \
-          --set-env-vars="SOLAPI_SENDER=${{ secrets.SOLAPI_SENDER }}" \
-          --set-env-vars="GCP_SA_KEY=${{ secrets.GCP_SA_KEY }}" \
-          --set-env-vars="POLLING_INTERVAL=${{ secrets.POLLING_INTERVAL }}"
+          --set-env-vars-file env.yaml
