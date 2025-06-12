@@ -41,6 +41,12 @@ jobs:
     - name: Authorize Docker push
       run: gcloud auth configure-docker
 
+    - name: Encode GCP_SA_KEY
+      id: encode_sa
+      run: |
+        echo "${{ secrets.GCP_SA_KEY }}" | base64 -w 0 > sa_key.b64
+        echo "GCP_SA_KEY_B64=$(cat sa_key.b64)" >> $GITHUB_ENV
+
     - name: Build and push container
       run: |
         echo "Building image: gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG"
@@ -58,5 +64,5 @@ jobs:
           --set-env-vars="SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }}" \
           --set-env-vars="SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }}" \
           --set-env-vars="SOLAPI_SENDER=${{ secrets.SOLAPI_SENDER }}" \
-          --set-env-vars="GCP_SA_KEY=${{ secrets.GCP_SA_KEY }}" \
+          --set-env-vars="GCP_SA_KEY_B64=$GCP_SA_KEY_B64" \
           --set-env-vars="POLLING_INTERVAL=${{ secrets.POLLING_INTERVAL }}"
