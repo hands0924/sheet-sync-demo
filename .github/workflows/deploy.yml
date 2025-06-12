@@ -59,4 +59,4 @@ jobs:
           --image gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG \
           --region $REGION \
           --allow-unauthenticated \
-          --set-env-vars-file env.yaml
+          --env-vars-file env.yaml
