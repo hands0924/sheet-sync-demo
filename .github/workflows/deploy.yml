@@ -20,22 +20,25 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Set up gcloud CLI
+      - name: Google Auth
+        id: auth
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v1
         with:
           project_id: ${{ secrets.GCP_PROJECT }}
-          # 서비스 계정 키를 JSON 문자열로 환경변수에 저장
-          service_account_key: ${{ secrets.GCP_SA_KEY }}
-          export_default_credentials: true
 
-      - name: Install dependencies (for local lint/test, optional)
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Deploy Cloud Function
         run: |
-          # 환경 변수로 함수 배포 시 설정
           gcloud functions deploy sheet_webhook \
             --gen2 \
             --runtime python310 \
