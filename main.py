@@ -309,27 +309,38 @@ def poll_sheet():
             # 시트 읽기
             result = service.spreadsheets().values().get(
                 spreadsheetId=SHEET_ID,
-                range=f"{SHEET_NAME}!A2:Z"
+                range=f"{SHEET_NAME}!A1:Z"  # 헤더를 포함하도록 수정
             ).execute()
             
-            rows = result.get('values', [])
-            if not rows:
+            values = result.get('values', [])
+            if len(values) < 2:
                 logger.info("No data found in sheet")
                 time.sleep(2)
                 continue
                 
+            # 헤더와 데이터 분리
+            headers = values[0]
+            rows = values[1:]
+            
+            # 데이터를 딕셔너리로 변환
+            data_rows = []
+            for row in rows:
+                row_full = row + ['']*(len(headers) - len(row))
+                row_dict = dict(zip(headers, row_full))
+                data_rows.append(row_dict)
+            
             # 마지막 처리 시간 가져오기
             last_ts = get_last_processed_timestamp()
             
             if initial_load:
                 logger.info("Performing initial data load...")
-                if rows:
+                if data_rows:
                     # 모든 행을 처리하고 가장 최근 타임스탬프 저장
                     latest_ts = None
-                    for row in rows:
-                        if len(row) > 0:
+                    for row in data_rows:
+                        if '타임스탬프' in row and row['타임스탬프']:
                             try:
-                                row_ts = parse_timestamp(row[0])
+                                row_ts = parse_timestamp(row['타임스탬프'])
                                 if latest_ts is None or row_ts > latest_ts:
                                     latest_ts = row_ts
                             except ValueError as e:
@@ -348,10 +359,10 @@ def poll_sheet():
             
             # 새로운 행 처리
             new_rows = []
-            for row in rows:
-                if len(row) > 0:
+            for row in data_rows:
+                if '타임스탬프' in row and row['타임스탬프']:
                     try:
-                        row_ts = parse_timestamp(row[0])
+                        row_ts = parse_timestamp(row['타임스탬프'])
                         if row_ts > last_ts:
                             new_rows.append(row)
                     except ValueError as e:
@@ -362,12 +373,14 @@ def poll_sheet():
                 logger.info(f"Found {len(new_rows)} new rows")
                 for row in new_rows:
                     try:
-                        row_ts = parse_timestamp(row[0])
+                        row_ts = parse_timestamp(row['타임스탬프'])
                         if row_ts > last_ts:
                             # SMS 전송을 위한 데이터 준비
-                            phone = row[1] if len(row) > 1 else ""  # 전화번호는 두 번째 열
-                            name = row[2] if len(row) > 2 else ""   # 이름은 세 번째 열
-                            inquiry = row[3] if len(row) > 3 else ""  # 문의 종류는 네 번째 열
+                            phone = row.get('전화번호') or row.get('Phone') or row.get("연락처 / Phone Number") or ""
+                            name = row.get('이름') or row.get('Name') or row.get("이름(혹은 닉네임) /  Name or nickname") or ''
+                            inquiry = row.get('문의 종류') or row.get('Inquiry') or row.get("프리즘지점에서,") or ''
+                            
+                            logger.info(f"행 처리 중: ts={row_ts}, phone={phone}, name={name}, inquiry={inquiry}")
                             
                             if not phone:
                                 logger.warning(f"전화번호 누락: ts={row_ts}")
