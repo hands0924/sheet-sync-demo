@@ -10,6 +10,10 @@ from dotenv import load_dotenv
 import time
 from solapi import SolapiMessageService
 from solapi.model import RequestMessage
+import base64
+from flask import Flask
+import threading
+
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
@@ -35,11 +39,17 @@ RECIPIENT_PHONE_NUMBER = os.getenv('RECIPIENT_PHONE_NUMBER')
 POLLING_INTERVAL = int(os.getenv('POLLING_INTERVAL', '300'))  # 기본값 5분
 GOOGLE_CREDENTIALS = os.getenv('GOOGLE_CREDENTIALS')
 
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Hello, World!"
+
 def get_firestore_client():
     """Firestore 클라이언트를 초기화하고 반환합니다."""
     try:
-        # Cloud Run 환경에서는 기본 인증을 사용
-        credentials_dict = json.loads(os.getenv('GCP_SA_KEY'))
+        sa_key_b64 = os.getenv('GCP_SA_KEY_B64')
+        credentials_dict = json.loads(base64.b64decode(sa_key_b64).decode())
         credentials = service_account.Credentials.from_service_account_info(
             credentials_dict,
             scopes=['https://www.googleapis.com/auth/cloud-platform']
@@ -410,4 +420,10 @@ def main():
         raise
 
 if __name__ == "__main__":
-    main()
+    # 백그라운드에서 폴링 시작
+    polling_thread = threading.Thread(target=poll_sheet)
+    polling_thread.daemon = True
+    polling_thread.start()
+    
+    # Flask 서버 시작
+    app.run(host='0.0.0.0', port=8080)
