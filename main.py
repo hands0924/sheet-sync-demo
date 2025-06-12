@@ -275,8 +275,12 @@ def poll_sheet():
     _last_processed_ts = get_last_processed_timestamp()
     logger.info(f"폴링 시작: sheet_id={sheet_id}, sheet_name={sheet_name}, last_ts={_last_processed_ts}")
     
+    poll_count = 0
     while _is_polling:
         try:
+            poll_count += 1
+            logger.info(f"폴링 시도 #{poll_count}")
+            
             # Sheet 읽기
             sheets = get_sheets_service()
             logger.info(f"Sheet 읽기 시도: {sheet_id}, {range_name}")
@@ -364,6 +368,7 @@ def poll_sheet():
         except Exception as e:
             logger.error(f"폴링 중 오류 발생: {e}", exc_info=True)
         
+        logger.info(f"폴링 완료 #{poll_count}, 2초 대기")
         time.sleep(2)  # 2초 대기
 
 def start_polling():
@@ -374,16 +379,21 @@ def start_polling():
         _is_polling = True
         _polling_thread = Thread(target=poll_sheet, daemon=True)
         _polling_thread.start()
-        logger.info("Sheet 폴링 시작")
+        logger.info("Sheet 폴링 시작됨")
+    else:
+        logger.info("이미 폴링이 실행 중입니다")
 
 def stop_polling():
     """폴링을 중지합니다."""
     global _is_polling
     
-    _is_polling = False
-    if _polling_thread and _polling_thread.is_alive():
-        _polling_thread.join(timeout=5)
-    logger.info("Sheet 폴링 중지")
+    if _is_polling:
+        _is_polling = False
+        if _polling_thread and _polling_thread.is_alive():
+            _polling_thread.join(timeout=5)
+        logger.info("Sheet 폴링 중지됨")
+    else:
+        logger.info("폴링이 실행 중이지 않습니다")
 
 # ---------- Cloud Function 엔트리포인트 ----------
 def sheet_webhook(request: Request):
@@ -392,9 +402,11 @@ def sheet_webhook(request: Request):
         logger.warning(f"잘못된 메서드: {request.method}")
         return ('Method Not Allowed', 405)
     
-    # 2) 요청 처리
+    # 2) 요청 처리fina
     try:
         data = request.get_json()
+        logger.info(f"요청 데이터: {data}")
+        
         if data and data.get('action') == 'start_polling':
             start_polling()
             return ('Polling started', 200)
@@ -409,6 +421,8 @@ def sheet_webhook(request: Request):
     if not resource_state:
         logger.warning("Invalid webhook: Missing X-Goog-Resource-State")
         abort(400, description="Invalid webhook call")
+    
+    logger.info(f"Webhook 호출: resource_state={resource_state}")
     
     # Sheet 읽기 및 처리
     sheet_id = os.getenv('SHEET_ID')
@@ -497,6 +511,9 @@ def sheet_webhook(request: Request):
                 logger.error(f"SMS 발송 실패: ts={ts}, phone={phone}")
         
         # 마지막 처리 타임스탬프 업데이트
-        update_last_processed_timestamp(latest_ts)
+        if update_last_processed_timestamp(latest_ts):
+            logger.info(f"타임스탬프 업데이트 성공: {latest_ts}")
+        else:
+            logger.error(f"타임스탬프 업데이트 실패: {latest_ts}")
 
     return ('OK', 200)

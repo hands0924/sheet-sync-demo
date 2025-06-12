@@ -50,10 +50,26 @@ jobs:
             --timeout=60s \
             --min-instances=0 \
             --max-instances=10 \
-            --set-env-vars="SHEET_ID=${{ secrets.SHEET_ID }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }},SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }},SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }},SENDER_PHONE=${{ secrets.SENDER_PHONE }},SHEET_NAME=${{ secrets.SHEET_NAME }}"
+            --set-env-vars="SHEET_ID=${{ secrets.SHEET_ID }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }},SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }},SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }},SENDER_PHONE=${{ secrets.SENDER_PHONE }},SHEET_NAME=${{ secrets.SHEET_NAME }}" \
+            --set-env-vars="LOG_LEVEL=INFO"
 
       - name: Verify Deployment
         run: |
           gcloud functions describe sheet_webhook \
             --region=us-central1 \
             --format="value(serviceConfig.uri)"
+
+      - name: Start Polling
+        run: |
+          FUNCTION_URL=$(gcloud functions describe sheet_webhook --region=us-central1 --format="value(serviceConfig.uri)")
+          echo "Starting polling at $FUNCTION_URL"
+          curl -X POST $FUNCTION_URL \
+            -H "Content-Type: application/json" \
+            -d '{"action": "start_polling"}'
+
+      - name: Check Logs
+        run: |
+          echo "Checking Cloud Function logs..."
+          gcloud logging read "resource.type=cloud_function AND resource.labels.function_name=sheet_webhook" \
+            --limit=10 \
+            --format="table(timestamp,severity,textPayload)"
