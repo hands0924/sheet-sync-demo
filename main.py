@@ -7,6 +7,7 @@ from google.cloud import firestore
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.auth import default as google_auth_default
 from googleapiclient.discovery import build
+from google.api_core.exceptions import NotFound
 
 from solapi import SolapiMessageService
 from solapi.model import RequestMessage
@@ -24,8 +25,17 @@ _message_service = None
 def get_firestore_client():
     global _firestore_client
     if _firestore_client is None:
-        _firestore_client = firestore.Client()
-        logger.info("Initialized Firestore client")
+        try:
+            _firestore_client = firestore.Client()
+            # Firestore 초기화 확인
+            _firestore_client.collections()
+            logger.info("Initialized Firestore client")
+        except NotFound as e:
+            logger.error("Firestore 데이터베이스가 생성되지 않았습니다. GCP 콘솔에서 Firestore를 생성해주세요.")
+            raise RuntimeError("Firestore database not initialized") from e
+        except Exception as e:
+            logger.error(f"Firestore 초기화 실패: {e}")
+            raise
     return _firestore_client
 
 # ---------- Sheets API 서비스 ----------
@@ -91,6 +101,44 @@ def send_sms(to_phone: str, text: str) -> bool:
         logger.error(f"SMS 실패: {e}")
         return False
 
+# ---------- Firestore 스냅샷 관리 ----------
+def get_snapshot():
+    """Firestore에서 스냅샷을 가져옵니다."""
+    firestore_doc = os.getenv('FIRESTORE_DOC')
+    if not firestore_doc or '/' not in firestore_doc:
+        logger.error("FIRESTORE_DOC 형식 오류")
+        return {}
+    
+    col, doc_id = firestore_doc.split('/', 1)
+    db = get_firestore_client()
+    doc_ref = db.collection(col).document(doc_id)
+    
+    try:
+        doc = doc_ref.get()
+        return doc.to_dict() if doc.exists else {}
+    except Exception as e:
+        logger.error(f"스냅샷 로드 실패: {e}")
+        return {}
+
+def save_snapshot(snapshot):
+    """Firestore에 스냅샷을 저장합니다."""
+    firestore_doc = os.getenv('ççFIRESTORE_DOC')
+    if not firestore_doc or '/' not in firestore_doc:
+        logger.error("FIRESTORE_DOC 형식 오류")
+        return False
+    
+    col, doc_id = firestore_doc.split('/', 1)
+    db = get_firestore_client()
+    doc_ref = db.collection(col).document(doc_id)
+    
+    try:
+        doc_ref.set(snapshot)
+        logger.info("스냅샷 저장 성공")
+        return True
+    except Exception as e:
+        logger.error(f"스냅샷 저장 실패: {e}")
+        return False
+
 # ---------- Cloud Function 엔트리포인트 ----------
 def sheet_webhook(request: Request):
     # 1) 메서드 검증
@@ -114,7 +162,7 @@ def sheet_webhook(request: Request):
             range=range_name
         ).execute()
     except Exception as e:
-        logger.exception("Sheets API 호출 실패")
+        logger.error(f"Sheet 읽기 실패: {e}")
         abort(500, description="Failed to read sheet")
 
     values = sheet_resp.get('values', [])
@@ -132,20 +180,8 @@ def sheet_webhook(request: Request):
             row_dict = dict(zip(headers, row_full))
             current_rows.append((ts, row_dict))
 
-    # 3) 이전 스냅샷
-    firestore_doc = os.getenv('FIRESTORE_DOC')
-    if not firestore_doc or '/' not in firestore_doc:
-        logger.error("FIRESTORE_DOC 형식 오류")
-        abort(500, description="Server configuration error")
-    col, doc_id = firestore_doc.split('/', 1)
-    db = get_firestore_client()
-    doc_ref = db.collection(col).document(doc_id)
-    prev = {}
-    try:
-        doc = doc_ref.get()
-        prev = doc.to_dict() or {}
-    except Exception:
-        logger.exception("이전 스냅샷 로드 실패")
+    # 3) 이전 스냅샷 로드
+    prev = get_snapshot()
 
     # 4) 변경 감지
     new_or_updated = []
@@ -167,9 +203,7 @@ def sheet_webhook(request: Request):
 
     # 6) 스냅샷 저장
     snapshot = {ts: row for ts, row in current_rows}
-    try:
-        doc_ref.set(snapshot)
-    except Exception:
-        logger.exception("스냅샷 저장 실패")
+    if not save_snapshot(snapshot):
+        logger.error("스냅샷 저장 실패")
 
     return ('OK', 200)
