@@ -46,11 +46,11 @@ jobs:
             --entry-point=sheet_webhook \
             --trigger-http \
             --allow-unauthenticated \
-            --memory=256MB \
+            --memory=512MB \
             --timeout=60s \
             --min-instances=0 \
             --max-instances=10 \
-            --set-env-vars="SHEET_ID=${{ secrets.SHEET_ID }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }},SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }},SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }},SENDER_PHONE=${{ secrets.SENDER_PHONE }}"
+            --set-env-vars="SHEET_ID=${{ secrets.SHEET_ID }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }},SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }},SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }},SENDER_PHONE=${{ secrets.SENDER_PHONE }},SHEET_NAME=${{ secrets.SHEET_NAME }}"
 
       - name: Verify Deployment
         run: |

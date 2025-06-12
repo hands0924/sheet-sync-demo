@@ -82,12 +82,13 @@ def sheet_webhook(request: Request):
         logging.error("환경 변수 SHEET_ID가 설정되지 않았습니다.")
         abort(500, description="Server configuration error")
     sheets = get_sheets_service()
-    # 시트 데이터 범위: 예시 'Form Responses!A1:Z'
-    RANGE_NAME = os.getenv('SHEET_RANGE', 'Form Responses!A1:Z')
+    # 시트 이름과 범위를 환경 변수에서 가져옴
+    sheet_name = os.getenv('SHEET_NAME', 'Sheet1')  # 기본값은 'Sheet1'
+    range_name = f"{sheet_name}!A1:Z"
     try:
         sheet_resp = sheets.spreadsheets().values().get(
             spreadsheetId=sheet_id,
-            range=RANGE_NAME
+            range=range_name
         ).execute()
     except Exception as e:
         logging.exception("Sheets API 호출 실패")
