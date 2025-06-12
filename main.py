@@ -2,6 +2,7 @@ import os
 import re
 import logging
 import time
+import json
 from flask import Request, abort
 from threading import Thread
 from datetime import datetime, timezone
@@ -33,16 +34,17 @@ def get_firestore_client():
     global _firestore_client
     if _firestore_client is None:
         try:
+            logger.info("Firestore 클라이언트 초기화 시도: database='sheet-sync'")
             # sheet-sync 데이터베이스 사용
             _firestore_client = firestore.Client(database='sheet-sync')
             # Firestore 초기화 확인
-            _firestore_client.collections()
-            logger.info("Initialized Firestore client with database 'sheet-sync'")
+            collections = list(_firestore_client.collections())
+            logger.info(f"Firestore 초기화 성공: database='sheet-sync', collections={[col.id for col in collections]}")
         except NotFound as e:
             logger.error("Firestore 데이터베이스 'sheet-sync'를 찾을 수 없습니다.")
             raise RuntimeError("Firestore database 'sheet-sync' not found") from e
         except Exception as e:
-            logger.error(f"Firestore 초기화 실패: {e}")
+            logger.error(f"Firestore 초기화 실패: {e}", exc_info=True)
             raise
     return _firestore_client
 
@@ -50,15 +52,19 @@ def get_firestore_client():
 def get_sheets_service():
     global _sheets_service
     if _sheets_service is None:
-        creds, _ = google_auth_default(scopes=[
-            'https://www.googleapis.com/auth/drive.readonly',
-            'https://www.googleapis.com/auth/spreadsheets.readonly'
-        ])
-        # 토큰 갱신
-        if not creds.valid:
-            creds.refresh(GoogleAuthRequest())
-        _sheets_service = build('sheets', 'v4', credentials=creds)
-        logger.info("Initialized Sheets service")
+        try:
+            creds, _ = google_auth_default(scopes=[
+                'https://www.googleapis.com/auth/drive.readonly',
+                'https://www.googleapis.com/auth/spreadsheets.readonly'
+            ])
+            # 토큰 갱신
+            if not creds.valid:
+                creds.refresh(GoogleAuthRequest())
+            _sheets_service = build('sheets', 'v4', credentials=creds)
+            logger.info("Initialized Sheets service")
+        except Exception as e:
+            logger.error(f"Sheets 서비스 초기화 실패: {e}")
+            raise
     return _sheets_service
 
 # ---------- Drive API 서비스 ----------
@@ -78,48 +84,60 @@ def get_drive_service():
 def get_message_service():
     global _message_service
     if _message_service is None:
-        api_key = os.getenv('SOLAPI_API_KEY')
-        api_secret = os.getenv('SOLAPI_API_SECRET')
-        if not api_key or not api_secret:
-            logger.error("Solapi API 키/시크릿 미설정")
-            raise RuntimeError("Missing Solapi credentials")
-        _message_service = SolapiMessageService(
-            api_key=api_key,
-            api_secret=api_secret
-        )
-        logger.info("Initialized SolapiMessageService")
+        try:
+            api_key = os.getenv('SOLAPI_API_KEY')
+            api_secret = os.getenv('SOLAPI_API_SECRET')
+            if not api_key or not api_secret:
+                logger.error("Solapi API 키/시크릿 미설정")
+                raise RuntimeError("Missing Solapi credentials")
+            _message_service = SolapiMessageService(
+                api_key=api_key,
+                api_secret=api_secret
+            )
+            logger.info("Initialized SolapiMessageService")
+        except Exception as e:
+            logger.error(f"Solapi 서비스 초기화 실패: {e}")
+            raise
     return _message_service
 
 # ---------- 전화번호 정규화 ----------
 def normalize_korean_number(number: str) -> str:
-    # 숫자만 남기기
-    digits = re.sub(r"\D", "", number)
-    # 국제번호 82 제거 후 0으로 시작
-    if digits.startswith("82"):
-        digits = '0' + digits[2:]
-    # 0으로 시작하지 않으면, 0 추가
-    if not digits.startswith('0'):
-        digits = '0' + digits
-    return digits
+    try:
+        # 숫자만 남기기
+        digits = re.sub(r"\D", "", number)
+        # 국제번호 82 제거 후 0으로 시작
+        if digits.startswith("82"):
+            digits = '0' + digits[2:]
+        # 0으로 시작하지 않으면, 0 추가
+        if not digits.startswith('0'):
+            digits = '0' + digits
+        logger.info(f"전화번호 정규화: {number} -> {digits}")
+        return digits
+    except Exception as e:
+        logger.error(f"전화번호 정규화 실패: {number}, 오류: {e}")
+        return number
 
 # ---------- SMS 발송 ----------
 def send_sms(to_phone: str, text: str) -> bool:
-    svc = get_message_service()
-    from_phone = normalize_korean_number(os.getenv('SENDER_PHONE', ''))
-    to_phone = normalize_korean_number(to_phone)
-
-    msg = RequestMessage(
-        from_=from_phone,
-        to=to_phone,
-        text=text
-    )
     try:
+        svc = get_message_service()
+        from_phone = normalize_korean_number(os.getenv('SENDER_PHONE', ''))
+        to_phone = normalize_korean_number(to_phone)
+
+        logger.info(f"SMS 발송 시도: from={from_phone}, to={to_phone}")
+        logger.debug(f"SMS 내용: {text}")
+
+        msg = RequestMessage(
+            from_=from_phone,
+            to=to_phone,
+            text=text
+        )
         resp = svc.send(msg)
         info = resp.group_info.count
         logger.info(f"SMS 성공: group_id={resp.group_info.group_id}, total={info.total}, success={info.registered_success}, failed={info.registered_failed}")
         return True
     except Exception as e:
-        logger.error(f"SMS 실패: {e}")
+        logger.error(f"SMS 발송 실패: {e}")
         return False
 
 # ---------- Firestore 스냅샷 관리 ----------
@@ -134,19 +152,28 @@ def get_last_processed_timestamp():
             return None
         
         col, doc_id = firestore_doc.split('/', 1)
-        db = get_firestore_client()
-        doc_ref = db.collection(col).document(doc_id)
+        logger.info(f"Firestore 문서 읽기 시도: database='sheet-sync', collection='{col}', document='{doc_id}'")
         
         try:
+            db = get_firestore_client()
+            doc_ref = db.collection(col).document(doc_id)
             doc = doc_ref.get()
+            
             if doc.exists:
                 data = doc.to_dict()
                 _last_processed_ts = data.get('last_processed_ts')
                 logger.info(f"마지막 처리 타임스탬프 로드: {_last_processed_ts}")
             else:
-                logger.info("마지막 처리 타임스탬프 없음")
+                logger.info("마지막 처리 타임스탬프 없음 - 새 문서 생성")
+                # 문서가 없으면 생성
+                doc_ref.set({
+                    'last_processed_ts': None,
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                })
+                _last_processed_ts = None
         except Exception as e:
-            logger.error(f"마지막 처리 타임스탬프 로드 실패: {e}")
+            logger.error(f"마지막 처리 타임스탬프 로드 실패: {e}", exc_info=True)
     
     return _last_processed_ts
 
@@ -160,19 +187,33 @@ def update_last_processed_timestamp(timestamp):
         return False
     
     col, doc_id = firestore_doc.split('/', 1)
-    db = get_firestore_client()
-    doc_ref = db.collection(col).document(doc_id)
+    logger.info(f"Firestore 문서 업데이트 시도: database='sheet-sync', collection='{col}', document='{doc_id}', timestamp={timestamp}")
     
     try:
-        doc_ref.set({
-            'last_processed_ts': timestamp,
-            'updated_at': datetime.now(timezone.utc).isoformat()
-        })
+        db = get_firestore_client()
+        doc_ref = db.collection(col).document(doc_id)
+        
+        # 문서 존재 여부 확인
+        doc = doc_ref.get()
+        if not doc.exists:
+            logger.info("문서가 존재하지 않음 - 새로 생성")
+            doc_ref.set({
+                'last_processed_ts': timestamp,
+                'created_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            })
+        else:
+            logger.info("기존 문서 업데이트")
+            doc_ref.update({
+                'last_processed_ts': timestamp,
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            })
+        
         _last_processed_ts = timestamp
-        logger.info(f"마지막 처리 타임스탬프 업데이트: {timestamp}")
+        logger.info(f"마지막 처리 타임스탬프 업데이트 성공: {timestamp}")
         return True
     except Exception as e:
-        logger.error(f"마지막 처리 타임스탬프 업데이트 실패: {e}")
+        logger.error(f"마지막 처리 타임스탬프 업데이트 실패: {e}", exc_info=True)
         return False
 
 # ---------- Drive Watch 설정 ----------
@@ -238,6 +279,8 @@ def poll_sheet():
         try:
             # Sheet 읽기
             sheets = get_sheets_service()
+            logger.info(f"Sheet 읽기 시도: {sheet_id}, {range_name}")
+            
             sheet_resp = sheets.spreadsheets().values().get(
                 spreadsheetId=sheet_id,
                 range=range_name
@@ -253,6 +296,10 @@ def poll_sheet():
             headers = values[0]
             data_rows = values[1:]
             current_rows = []
+            
+            logger.info(f"헤더: {headers}")
+            logger.info(f"데이터 행 수: {len(data_rows)}")
+            
             for row in data_rows:
                 row_full = row + ['']*(len(headers) - len(row))
                 ts, *rest = row_full
@@ -269,17 +316,24 @@ def poll_sheet():
             
             if new_rows:
                 logger.info(f"새로운 행 발견: {len(new_rows)}개")
+                logger.debug(f"새로운 행 데이터: {json.dumps(new_rows, ensure_ascii=False, indent=2)}")
+                
                 # 가장 최근 타임스탬프 찾기
                 latest_ts = max(ts for ts, _ in new_rows)
+                logger.info(f"가장 최근 타임스탬프: {latest_ts}")
                 
                 # SMS 발송
                 for ts, row in new_rows:
                     phone = row.get('전화번호') or row.get('Phone') or row.get("연락처 / Phone Number") or ""
                     name = row.get('이름') or row.get('Name') or row.get("이름(혹은 닉네임) /  Name or nickname") or ''
                     inquiry = row.get('문의 종류') or row.get('Inquiry') or row.get("프리즘지점에서,") or ''
+                    
+                    logger.info(f"행 처리 중: ts={ts}, phone={phone}, name={name}, inquiry={inquiry}")
+                    
                     if not phone:
                         logger.warning(f"전화번호 누락: ts={ts}")
                         continue
+                        
                     text = f"""
                     [포용적 금융서비스, 프리즘지점]
                     {name}님, 만사형통 프리즘 부적 이벤트에 참여해주셔서 감사합니다! 
@@ -295,16 +349,20 @@ def poll_sheet():
                     앞으로 소식은
                     [인스타그램] 팔로우해주세요!
                     www.instagram.com/prism.fin"""
+                    
                     if not send_sms(phone, text):
                         logger.error(f"SMS 발송 실패: ts={ts}, phone={phone}")
                 
                 # 마지막 처리 타임스탬프 업데이트
-                update_last_processed_timestamp(latest_ts)
+                if update_last_processed_timestamp(latest_ts):
+                    logger.info(f"타임스탬프 업데이트 성공: {latest_ts}")
+                else:
+                    logger.error(f"타임스탬프 업데이트 실패: {latest_ts}")
             else:
                 logger.info("새로운 행 없음")
             
         except Exception as e:
-            logger.error(f"폴링 중 오류 발생: {e}")
+            logger.error(f"폴링 중 오류 발생: {e}", exc_info=True)
         
         time.sleep(2)  # 2초 대기
 
@@ -331,6 +389,7 @@ def stop_polling():
 def sheet_webhook(request: Request):
     # 1) 메서드 검증
     if request.method != 'POST':
+        logger.warning(f"잘못된 메서드: {request.method}")
         return ('Method Not Allowed', 405)
     
     # 2) 요청 처리
@@ -342,8 +401,8 @@ def sheet_webhook(request: Request):
         elif data and data.get('action') == 'stop_polling':
             stop_polling()
             return ('Polling stopped', 200)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"요청 처리 중 오류: {e}", exc_info=True)
     
     # 3) 기존 webhook 처리
     resource_state = request.headers.get('X-Goog-Resource-State')
@@ -362,12 +421,13 @@ def sheet_webhook(request: Request):
     range_name = f"{sheet_name}!A1:Z"
     
     try:
+        logger.info(f"Sheet 읽기 시도: {sheet_id}, {range_name}")
         sheet_resp = sheets.spreadsheets().values().get(
             spreadsheetId=sheet_id,
             range=range_name
         ).execute()
     except Exception as e:
-        logger.error(f"Sheet 읽기 실패: {e}")
+        logger.error(f"Sheet 읽기 실패: {e}", exc_info=True)
         abort(500, description="Failed to read sheet")
 
     values = sheet_resp.get('values', [])
@@ -377,6 +437,10 @@ def sheet_webhook(request: Request):
         headers = values[0]
         data_rows = values[1:]
         current_rows = []
+        
+        logger.info(f"헤더: {headers}")
+        logger.info(f"데이터 행 수: {len(data_rows)}")
+        
         for row in data_rows:
             row_full = row + ['']*(len(headers) - len(row))
             ts, *rest = row_full
@@ -395,6 +459,9 @@ def sheet_webhook(request: Request):
             new_rows.append((ts, row))
     
     if new_rows:
+        logger.info(f"새로운 행 발견: {len(new_rows)}개")
+        logger.debug(f"새로운 행 데이터: {json.dumps(new_rows, ensure_ascii=False, indent=2)}")
+        
         # 가장 최근 타임스탬프 찾기
         latest_ts = max(ts for ts, _ in new_rows)
         
@@ -403,9 +470,13 @@ def sheet_webhook(request: Request):
             phone = row.get('전화번호') or row.get('Phone') or row.get("연락처 / Phone Number") or ""
             name = row.get('이름') or row.get('Name') or row.get("이름(혹은 닉네임) /  Name or nickname") or ''
             inquiry = row.get('문의 종류') or row.get('Inquiry') or row.get("프리즘지점에서,") or ''
+            
+            logger.info(f"행 처리 중: ts={ts}, phone={phone}, name={name}, inquiry={inquiry}")
+            
             if not phone:
                 logger.warning(f"전화번호 누락: ts={ts}")
                 continue
+                
             text = f"""
             [포용적 금융서비스, 프리즘지점]
             {name}님, 만사형통 프리즘 부적 이벤트에 참여해주셔서 감사합니다! 
@@ -421,6 +492,7 @@ def sheet_webhook(request: Request):
             앞으로 소식은
             [인스타그램] 팔로우해주세요!
             www.instagram.com/prism.fin"""
+            
             if not send_sms(phone, text):
                 logger.error(f"SMS 발송 실패: ts={ts}, phone={phone}")
         
