@@ -2,62 +2,40 @@ name: Deploy to Cloud Run
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches:
+      - main
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  SERVICE_NAME: ${{ secrets.SERVICE_NAME }}
-  REGION: ${{ secrets.GCP_REGION }}
-  IMAGE_TAG: ${{ secrets.IMAGE_TAG }}
-  SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-  SHEET_NAME: ${{ secrets.SHEET_NAME }}
-  SOLAPI_API_KEY: ${{ secrets.SOLAPI_API_KEY }}
-  SOLAPI_API_SECRET: ${{ secrets.SOLAPI_API_SECRET }}
-  SOLAPI_SENDER: ${{ secrets.SOLAPI_SENDER }}
-  POLLING_INTERVAL: ${{ secrets.POLLING_INTERVAL }}
-  GCP_SA_KEY: |
-    ${{ secrets.GCP_SA_KEY }}
+  PROJECT_ID: prism-fin
+  SERVICE_NAME: sheet-sync
+  REGION: us-central1
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: 'read'
-      id-token: 'write'
+      contents: read
+      id-token: write
 
     steps:
-    - name: Checkout code
+    - name: Checkout
       uses: actions/checkout@v4
 
-    - id: 'auth'
-      name: 'Authenticate to Google Cloud'
-      uses: 'google-github-actions/auth@v2'
+    - id: auth
+      name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
       with:
-        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+        workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+        service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
 
-    - name: Authorize Docker push
-      run: gcloud auth configure-docker
-
-    - name: Encode GCP_SA_KEY
-      id: encode_sa
-      run: |
-        echo "${{ secrets.GCP_SA_KEY }}" | base64 -w 0 > sa_key.b64
-        echo "GCP_SA_KEY_B64=$(cat sa_key.b64)" >> $GITHUB_ENV
-
-    - name: Build and push container
-      run: |
-        echo "Building image: gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG"
-        docker build -t gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG .
-        docker push gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG
-
     - name: Deploy to Cloud Run
       run: |
-        gcloud run deploy $SERVICE_NAME \
-          --image gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG \
-          --region $REGION \
+        gcloud run deploy ${{ env.SERVICE_NAME }} \
+          --project ${{ env.PROJECT_ID }} \
+          --region ${{ env.REGION }} \
+          --source . \
           --allow-unauthenticated \
-          --env-vars-file env.yaml \
-          --timeout 300
+          --set-env-vars="SPREADSHEET_ID=${{ secrets.SPREADSHEET_ID }},SHEET_NAME=${{ secrets.SHEET_NAME }},POLLING_INTERVAL=1,SOLAPI_SENDER=${{ secrets.SOLAPI_SENDER }},SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }},SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }}"
