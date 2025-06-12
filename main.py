@@ -461,8 +461,13 @@ def sheet_webhook(request: Request):
     # 새로운 행만 처리
     new_rows = []
     for ts, row in current_rows:
-        if last_ts is None or ts > last_ts:
-            new_rows.append((ts, row))
+        try:
+            parsed_ts = parse_timestamp(ts)
+            if last_ts is None or parsed_ts > last_ts:
+                new_rows.append((parsed_ts, row))
+        except ValueError as e:
+            logger.error(f"Error parsing timestamp: {e}")
+            continue
     
     if new_rows:
         logger.info(f"새로운 행 발견: {len(new_rows)}개")
