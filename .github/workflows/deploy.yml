@@ -2,10 +2,13 @@ name: Deploy Cloud Function
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+  workflow_dispatch:  # 수동 실행 옵션 추가
 
 jobs:
-  build-and-deploy:
+  deploy:
+    name: Deploy sheet_webhook Function
     runs-on: ubuntu-latest
 
     steps:
@@ -15,119 +18,39 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT }}
+          # 서비스 계정 키를 JSON 문자열로 환경변수에 저장
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
+
+      - name: Install dependencies (for local lint/test, optional)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v1
-        with:
-          credentials_json: "${{ secrets.GCP_SA_KEY }}"
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v1
-        with:
-          project_id: "${{ secrets.GCP_PROJECT }}"
-
-      - name: Deploy to Cloud Functions
-        env:
-          GCP_PROJECT: "${{ secrets.GCP_PROJECT }}"
-          SHEET_ID: ${{ secrets.SHEET_ID }}
-          FIRESTORE_DOC: ${{ secrets.FIRESTORE_DOC }}
-          SOLAPI_API_KEY: ${{ secrets.SOLAPI_API_KEY }}
-          SOLAPI_API_SECRET: ${{ secrets.SOLAPI_API_SECRET }}
-          SENDER_PHONE: ${{ secrets.SENDER_PHONE }}
+      - name: Deploy Cloud Function
         run: |
-          # 프로젝트 ID 검증
-          if [ -z "${GCP_PROJECT}" ]; then
-            echo "Error: GCP_PROJECT 환경 변수가 설정되지 않았습니다."
-            exit 1
-          fi
-          
-          echo "현재 프로젝트 ID: ${GCP_PROJECT}"
-          
-          # 프로젝트 존재 여부 확인
-          if ! gcloud projects describe "${GCP_PROJECT}" > /dev/null 2>&1; then
-            echo "Error: 프로젝트 '${GCP_PROJECT}'가 존재하지 않거나 접근할 수 없습니다."
-            echo "사용 가능한 프로젝트 목록:"
-            gcloud projects list
-            exit 1
-          fi
-          
-          # 프로젝트 설정
-          echo "프로젝트 설정 중..."
-          gcloud config set project "${GCP_PROJECT}"
-          
-          # 현재 인증된 계정 확인
-          echo "현재 인증된 계정:"
-          gcloud auth list
-          
-          # 서비스 계정 권한 확인
-          echo "서비스 계정 권한 확인 중..."
-          if ! gcloud projects get-iam-policy "${GCP_PROJECT}" --format="table(bindings.role,bindings.members)" | grep -q "sheet-sync-sa@${GCP_PROJECT}.iam.gserviceaccount.com"; then
-            echo "Warning: 서비스 계정이 프로젝트에 대한 권한이 없을 수 있습니다."
-          fi
-          
-          # 이전 배포 작업이 완료될 때까지 대기
-          echo "이전 배포 작업이 완료될 때까지 대기 중..."
-          while true; do
-            if gcloud functions describe sheet_webhook --region=us-central1 --format="get(state)" 2>/dev/null | grep -q "DEPLOYING"; then
-              echo "이전 배포가 진행 중입니다. 30초 대기..."
-              sleep 30
-            else
-              break
-            fi
-          done
-          
-          # 환경 변수 파일 생성 (JSON 형식 사용)
-          echo '{' > env.json
-          echo '  "SHEET_ID": "'"${SHEET_ID}"'",' >> env.json
-          echo '  "FIRESTORE_DOC": "'"${FIRESTORE_DOC}"'",' >> env.json
-          echo '  "GCP_SA_KEY": '"${{ secrets.GCP_SA_KEY }}" >> env.json
-          
-          # 선택적 환경 변수 추가
-          if [ -n "${SOLAPI_API_KEY}" ]; then
-            echo ',"SOLAPI_API_KEY": "'"${SOLAPI_API_KEY}"'"' >> env.json
-          fi
-          if [ -n "${SOLAPI_API_SECRET}" ]; then
-            echo ',"SOLAPI_API_SECRET": "'"${SOLAPI_API_SECRET}"'"' >> env.json
-          fi
-          if [ -n "${SENDER_PHONE}" ]; then
-            echo ',"SENDER_PHONE": "'"${SENDER_PHONE}"'"' >> env.json
-          fi
-          
-          # JSON 파일 닫기
-          echo '}' >> env.json
-          
-          # 실제 배포
+          # 환경 변수로 함수 배포 시 설정
           gcloud functions deploy sheet_webhook \
-            --project="${GCP_PROJECT}" \
+            --gen2 \
             --runtime python310 \
-            --trigger-http \
-            --entry-point=sheet_webhook \
-            --service-account=sheet-sync-sa@${GCP_PROJECT}.iam.gserviceaccount.com \
             --region=us-central1 \
+            --entry-point=sheet_webhook \
+            --trigger-http \
             --allow-unauthenticated \
-            --memory=512MB \
-            --timeout=540s \
+            --memory=256MB \
+            --timeout=60s \
             --min-instances=0 \
-            --max-instances=100 \
-            --env-vars-file=env.json
-          
-          # 배포 상태 확인
-          echo "배포 상태 확인 중..."
-          for i in {1..12}; do
-            state=$(gcloud functions describe sheet_webhook --region=us-central1 --format="get(state)")
-            if [ "$state" = "ACTIVE" ]; then
-              echo "배포가 성공적으로 완료되었습니다."
-              exit 0
-            fi
-            echo "배포 진행 중... ($i/12)"
-            sleep 10
-          done
-          
-          echo "배포 시간이 초과되었습니다. 최종 상태: $state"
-          exit 1
+            --max-instances=10 \
+            --set-env-vars="SHEET_ID=${{ secrets.SHEET_ID }},FIRESTORE_DOC=${{ secrets.FIRESTORE_DOC }},SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }},SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }},SENDER_PHONE=${{ secrets.SENDER_PHONE }}"
+
+      - name: Verify Deployment
+        run: |
+          gcloud functions describe sheet_webhook \
+            --region=us-central1 \
+            --format="value(serviceConfig.uri)"
