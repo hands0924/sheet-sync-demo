@@ -379,13 +379,27 @@ def sheet_webhook(request: Request):
         
         # SMS 발송
         for ts, row in new_rows:
-            phone = row.get('전화번호') or row.get('Phone') or ''
-            name = row.get('이름') or row.get('Name') or ''
-            inquiry = row.get('문의 종류') or row.get('Inquiry') or ''
+            phone = row.get('전화번호') or row.get('Phone') or row.get("연락처 / Phone Number") or ""
+            name = row.get('이름') or row.get('Name') or row.get("이름(혹은 닉네임) /  Name or nickname") or ''
+            inquiry = row.get('문의 종류') or row.get('Inquiry') or row.get("프리즘지점에서,") or ''
             if not phone:
                 logger.warning(f"전화번호 누락: ts={ts}")
                 continue
-            text = f"[알림]\n{name}님, '{inquiry}' 문의가 접수되었습니다. 감사합니다."
+            text = f"""
+                    [포용적 금융서비스, 프리즘지점]
+                    {name}님, 만사형통 프리즘 부적 이벤트에 참여해주셔서 감사합니다! 
+
+                    프리즘지점은 퀴어 당사자와 앨라이 보험설계사가 함께하는 보험 조직입니다. 모두를 위한 미래보장을 꿈꾸며, 금융의 경계를 넘어 연대합니다.
+
+                    선택해주신 {inquiry} 문의에 반가운 마음을 전하며, 유용한 소식과 답변 안내드릴 수 있도록 곧 다시 연락드리겠습니다. 고맙습니다!
+
+                    프리즘지점 드림
+                    [보험상담 및 채용문의]
+                    https://litt.ly/prism.fin
+
+                    앞으로 소식은
+                    [인스타그램] 팔로우해주세요!
+                    www.instagram.com/prism.fin"""
             if not send_sms(phone, text):
                 logger.error(f"SMS 발송 실패: ts={ts}, phone={phone}")
         
