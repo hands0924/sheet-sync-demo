@@ -26,13 +26,14 @@ def get_firestore_client():
     global _firestore_client
     if _firestore_client is None:
         try:
-            _firestore_client = firestore.Client()
+            # sheet-sync 데이터베이스 사용
+            _firestore_client = firestore.Client(database='sheet-sync')
             # Firestore 초기화 확인
             _firestore_client.collections()
-            logger.info("Initialized Firestore client")
+            logger.info("Initialized Firestore client with database 'sheet-sync'")
         except NotFound as e:
-            logger.error("Firestore 데이터베이스가 생성되지 않았습니다. GCP 콘솔에서 Firestore를 생성해주세요.")
-            raise RuntimeError("Firestore database not initialized") from e
+            logger.error("Firestore 데이터베이스 'sheet-sync'를 찾을 수 없습니다.")
+            raise RuntimeError("Firestore database 'sheet-sync' not found") from e
         except Exception as e:
             logger.error(f"Firestore 초기화 실패: {e}")
             raise
