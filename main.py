@@ -70,11 +70,7 @@ def get_firestore_client():
 def get_sheets_service():
     """Google Sheets API 서비스를 초기화하고 반환합니다."""
     try:
-        credentials = service_account.Credentials.from_service_account_file(
-            'sheet-sync-sa-key.json',
-            scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
-        )
-        service = build('sheets', 'v4', credentials=credentials)
+        service = build('sheets', 'v4')
         logger.info("Google Sheets API 서비스 초기화 성공")
         return service
     except Exception as e:
@@ -219,12 +215,12 @@ def poll_sheet():
 
 def init_google_client():
     try:
-        credentials_dict = json.loads(GOOGLE_CREDENTIALS)
-        credentials = service_account.Credentials.from_service_account_info(
-            credentials_dict,
-            scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
-        )
-        service = build('sheets', 'v4', credentials=credentials)
+#        credentials_dict = json.loads(GOOGLE_CREDENTIALS)
+#        credentials = service_account.Credentials.from_service_account_info(
+#            credentials_dict,
+#            scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
+#        )
+        service = build('sheets', 'v4')#, credentials=credentials)
         return service
     except Exception as e:
         logger.error(f"Google API 클라이언트 초기화 실패: {str(e)}")
@@ -232,11 +228,11 @@ def init_google_client():
 
 def init_firestore_client():
     try:
-        credentials_dict = json.loads(GOOGLE_CREDENTIALS)
-        credentials = service_account.Credentials.from_service_account_info(
-            credentials_dict
-        )
-        db = firestore.Client(credentials=credentials)
+#        credentials_dict = json.loads(GOOGLE_CREDENTIALS)
+#        credentials = service_account.Credentials.from_service_account_info(
+#            credentials_dict
+#        )
+        db = firestore.Client()#credentials=credentials)
         return db
     except Exception as e:
         logger.error(f"Firestore 클라이언트 초기화 실패: {str(e)}")
