@@ -9,6 +9,10 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import requests  # Solapi 호출
 
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # 전역 변수: 클라이언트는 lazy initialization 패턴으로 처리
 _firestore_client = None
 _sheets_service = None
@@ -54,13 +58,54 @@ def get_solapi_session():
         api_key = os.getenv('SOLAPI_API_KEY')
         api_secret = os.getenv('SOLAPI_API_SECRET')
         if not api_key or not api_secret:
-            logging.error("Solapi API 키/시크릿이 설정되지 않았습니다.")
+            logger.error("Solapi API 키/시크릿이 설정되지 않았습니다.")
             raise RuntimeError("Missing Solapi credentials")
         session = requests.Session()
         # Solapi는 Basic Auth 혹은 HMAC 인증 방식일 수 있으므로, 여기서는 예시로 Basic Auth 사용
         session.auth = (api_key, api_secret)
         _solapi_session = session
     return _solapi_session
+
+def send_solapi_sms(phone, message, sender_phone):
+    """
+    Solapi API를 통해 SMS를 발송하는 함수
+    """
+    session = get_solapi_session()
+    
+    # 전화번호 형식 정리 (하이픈 제거)
+    phone = phone.replace('-', '').strip()
+    if not phone.startswith('82'):
+        phone = '82' + phone.lstrip('0')
+    
+    # 발신자 번호 형식 정리
+    sender_phone = sender_phone.replace('-', '').strip()
+    if not sender_phone.startswith('82'):
+        sender_phone = '82' + sender_phone.lstrip('0')
+    
+    payload = {
+        "message": {
+            "to": phone,
+            "from": sender_phone,
+            "text": message
+        }
+    }
+    
+    logger.info(f"Solapi SMS 발송 시도 - Payload: {json.dumps(payload, ensure_ascii=False)}")
+    
+    try:
+        resp = session.post(
+            "https://api.solapi.com/messages/v4/send",
+            json=payload,
+            timeout=10
+        )
+        resp.raise_for_status()
+        logger.info(f"Solapi SMS 발송 성공 - Response: {resp.text}")
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Solapi SMS 발송 실패 - Error: {str(e)}")
+        if hasattr(e.response, 'text'):
+            logger.error(f"Response: {e.response.text}")
+        return False
 
 def sheet_webhook(request: Request):
     """
@@ -72,14 +117,14 @@ def sheet_webhook(request: Request):
     resource_state = request.headers.get('X-Goog-Resource-State')
     # DRIVE notification validation: resource_state이 'change' 등 적절한 값인지 확인
     if not resource_state:
-        logging.warning("Missing X-Goog-Resource-State header")
+        logger.warning("Missing X-Goog-Resource-State header")
         abort(400, description="Invalid webhook call")
     # TODO: 추가 검증: 인증 토큰, 채널 ID 일치 여부 등
 
     # 2) Google Sheet 내용 읽기
     sheet_id = os.getenv('SHEET_ID')
     if not sheet_id:
-        logging.error("환경 변수 SHEET_ID가 설정되지 않았습니다.")
+        logger.error("환경 변수 SHEET_ID가 설정되지 않았습니다.")
         abort(500, description="Server configuration error")
     sheets = get_sheets_service()
     # 시트 이름과 범위를 환경 변수에서 가져옴
@@ -91,14 +136,14 @@ def sheet_webhook(request: Request):
             range=range_name
         ).execute()
     except Exception as e:
-        logging.exception("Sheets API 호출 실패")
+        logger.exception("Sheets API 호출 실패")
         abort(500, description="Failed to read sheet")
 
     values = sheet_resp.get('values', [])
     # 헤더 행과 데이터 행 구분
     if not values or len(values) < 2:
         # 응답이 없거나 헤더만 있는 경우 특별 처리
-        logging.info("Sheet에 데이터가 없음")
+        logger.info("Sheet에 데이터가 없음")
         current_rows = []
     else:
         headers = values[0]
@@ -117,12 +162,12 @@ def sheet_webhook(request: Request):
     # 3) Firestore 이전 스냅샷 불러오기
     firestore_doc = os.getenv('FIRESTORE_DOC')
     if not firestore_doc:
-        logging.error("환경 변수 FIRESTORE_DOC이 설정되지 않았습니다.")
+        logger.error("환경 변수 FIRESTORE_DOC이 설정되지 않았습니다.")
         abort(500, description="Server configuration error")
     # firestore_doc 예: 'sheet_snapshots/latest'
     parts = firestore_doc.split('/', 1)
     if len(parts) != 2:
-        logging.error("FIRESTORE_DOC 형식이 'collection/document'이어야 합니다.")
+        logger.error("FIRESTORE_DOC 형식이 'collection/document'이어야 합니다.")
         abort(500, description="Server configuration error")
     collection, document = parts
     db = get_firestore_client()
@@ -133,7 +178,7 @@ def sheet_webhook(request: Request):
         if doc.exists:
             prev_snapshot = doc.to_dict() or {}
     except Exception:
-        logging.exception("Firestore 이전 스냅샷 로드 실패")
+        logger.exception("Firestore 이전 스냅샷 로드 실패")
         # 계속 처리: prev_snapshot 빈 dict로 간주
 
     # 4) 신규/변경된 행 식별
@@ -151,35 +196,27 @@ def sheet_webhook(request: Request):
     # 삭제된 행은 SMS와 무관하므로 무시
 
     # 5) Solapi로 SMS 발송
-    session = get_solapi_session()
     sender_phone = os.getenv('SENDER_PHONE')
     if not sender_phone:
-        logging.error("환경 변수 SENDER_PHONE이 설정되지 않았습니다.")
+        logger.error("환경 변수 SENDER_PHONE이 설정되지 않았습니다.")
         abort(500, description="Server configuration error")
+    
     # 예: row_dict에서 '이름', '전화번호', '문의 종류' 키 사용
     for ts, row in new_or_updated:
         name = row.get('이름') or row.get('Name') or ''
         phone = row.get('전화번호') or row.get('Phone') or ''
         inquiry = row.get('문의 종류') or row.get('Inquiry') or ''
+        
         if not phone:
-            logging.warning(f"전화번호 누락: ts={ts}")
+            logger.warning(f"전화번호 누락: ts={ts}")
             continue
+            
         # SMS 메시지 내용 구성
         message_text = f"[알림]\n{name}님, '{inquiry}' 문의가 접수되었습니다. 감사합니다."
-        # Solapi REST API 호출 예시
-        try:
-            resp = session.post(
-                "https://api.solapi.com/messages/v4/send",
-                json={
-                    "message": message_text,
-                    "to": phone,
-                    "from": sender_phone
-                },
-                timeout=10
-            )
-            resp.raise_for_status()
-        except Exception:
-            logging.exception(f"Solapi SMS 전송 실패: ts={ts}, phone={phone}")
+        
+        # SMS 발송
+        if not send_solapi_sms(phone, message_text, sender_phone):
+            logger.error(f"SMS 발송 실패: ts={ts}, phone={phone}")
 
     # 6) Firestore 스냅샷 업데이트
     # 전체 current_rows를 dict 형태로 저장
@@ -187,6 +224,6 @@ def sheet_webhook(request: Request):
     try:
         doc_ref.set(new_snapshot)
     except Exception:
-        logging.exception("Firestore 스냅샷 저장 실패")
+        logger.exception("Firestore 스냅샷 저장 실패")
 
     return ('OK', 200)
