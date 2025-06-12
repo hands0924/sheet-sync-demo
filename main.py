@@ -46,10 +46,15 @@ def home():
     return "Hello, World!"
 
 def get_firestore_client():
-    """Firestore 클라이언트를 초기화하고 반환합니다."""
     try:
         sa_key_b64 = os.getenv('GCP_SA_KEY_B64')
-        credentials_dict = json.loads(base64.b64decode(sa_key_b64).decode())
+        if not sa_key_b64:
+            raise ValueError("GCP_SA_KEY_B64 환경 변수가 설정되지 않았습니다.")
+        
+        # base64 디코딩
+        sa_key_json = base64.b64decode(sa_key_b64).decode('utf-8')
+        credentials_dict = json.loads(sa_key_json)
+        
         credentials = service_account.Credentials.from_service_account_info(
             credentials_dict,
             scopes=['https://www.googleapis.com/auth/cloud-platform']
