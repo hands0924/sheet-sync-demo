@@ -259,6 +259,34 @@ def setup_drive_watch():
         return False
 
 # ---------- Sheet 폴링 ----------
+def parse_timestamp(ts_str):
+    """한글 타임스탬프 형식을 처리합니다."""
+    try:
+        # 오후/오전을 24시간 형식으로 변환
+        if '오후' in ts_str:
+            ts_str = ts_str.replace('오후', '').strip()
+            hour = int(ts_str.split(':')[0].split()[-1])
+            if hour < 12:
+                hour += 12
+            ts_str = ts_str.replace(str(hour), str(hour))
+        elif '오전' in ts_str:
+            ts_str = ts_str.replace('오전', '').strip()
+        
+        # 날짜 형식 변환 (2025. 6. 12 -> 2025-06-12)
+        date_part = ts_str.split()[0:3]
+        if len(date_part) == 3:
+            year = date_part[0].replace('.', '')
+            month = date_part[1].replace('.', '').zfill(2)
+            day = date_part[2].replace('.', '').zfill(2)
+            date_str = f"{year}-{month}-{day}"
+            time_str = ' '.join(ts_str.split()[3:])
+            ts_str = f"{date_str} {time_str}"
+        
+        return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+    except Exception as e:
+        logger.error(f"Error parsing timestamp '{ts_str}': {e}")
+        raise
+
 def poll_sheet():
     """2초마다 시트를 확인하고 변경사항이 있으면 처리합니다."""
     global _last_processed_ts
@@ -293,7 +321,7 @@ def poll_sheet():
                     last_row = rows[-1]
                     if len(last_row) > 0:
                         try:
-                            last_ts = datetime.strptime(last_row[0], "%Y-%m-%d %H:%M:%S")
+                            last_ts = parse_timestamp(last_row[0])
                             update_last_processed_timestamp(last_ts)
                             logger.info(f"Initial timestamp set to: {last_ts}")
                         except ValueError as e:
@@ -306,7 +334,7 @@ def poll_sheet():
             for row in rows:
                 if len(row) > 0:
                     try:
-                        row_ts = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+                        row_ts = parse_timestamp(row[0])
                         if row_ts > last_ts:
                             new_rows.append(row)
                     except ValueError as e:
@@ -317,7 +345,7 @@ def poll_sheet():
                 logger.info(f"Found {len(new_rows)} new rows")
                 for row in new_rows:
                     try:
-                        row_ts = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+                        row_ts = parse_timestamp(row[0])
                         if row_ts > last_ts:
                             # SMS 전송
                             send_sms(row)
