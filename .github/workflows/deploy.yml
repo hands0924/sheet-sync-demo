@@ -15,9 +15,9 @@ env:
   SOLAPI_API_KEY: ${{ secrets.SOLAPI_API_KEY }}
   SOLAPI_API_SECRET: ${{ secrets.SOLAPI_API_SECRET }}
   SOLAPI_SENDER: ${{ secrets.SOLAPI_SENDER }}
-  GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
   POLLING_INTERVAL: ${{ secrets.POLLING_INTERVAL }}
-
+  GCP_SA_KEY: |
+    ${{ secrets.GCP_SA_KEY }}
 jobs:
   deploy:
     runs-on: ubuntu-latest

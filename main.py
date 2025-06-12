@@ -58,7 +58,7 @@ def get_firestore_client():
         )
         db = firestore.Client(
             project='prism-fin',  # 하드코딩된 프로젝트 ID
-            credentials=credentials,
+#            credentials=credentials,
             database='sheet-sync'  # 하드코딩된 데이터베이스 이름
         )
         logger.info("Firestore 클라이언트 초기화 성공")
