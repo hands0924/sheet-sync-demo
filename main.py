@@ -209,97 +209,13 @@ def poll_sheet():
             headers = values[0]
             data_rows = values[1:]
             
-            # 각 행을 딕셔너리로 변환
-            rows = []
-            for row in data_rows:
-                row_dict = {}
-                for i, value in enumerate(row):
-                    if i < len(headers):
-                        row_dict[headers[i]] = value
-                rows.append(row_dict)
+            # 여기서 데이터 처리 로직 추가
+            logger.info(f"시트 데이터 확인: {len(data_rows)} 행")
             
-            if initial_load:
-                logger.info("초기 데이터 로드 중...")
-                if rows:
-                    # 가장 최근 타임스탬프 찾기
-                    latest_timestamp = None
-                    for row in rows:
-                        try:
-                            timestamp_str = row.get('타임스탬프', '')
-                            if timestamp_str:
-                                timestamp = parse_timestamp(timestamp_str)
-                                if latest_timestamp is None or timestamp > latest_timestamp:
-                                    latest_timestamp = timestamp
-                        except Exception as e:
-                            logger.error(f"타임스탬프 파싱 오류: {e}")
-                            continue
-                    
-                    if latest_timestamp:
-                        last_processed_timestamp = latest_timestamp
-                        logger.info(f"초기 데이터 로드 완료. 마지막 타임스탬프: {last_processed_timestamp}")
-                initial_load = False
-                continue
-            
-            # 새로운 행 처리
-            new_rows = []
-            for row in rows:
-                try:
-                    timestamp_str = row.get('타임스탬프', '')
-                    if not timestamp_str:
-                        continue
-                        
-                    timestamp = parse_timestamp(timestamp_str)
-                    if last_processed_timestamp is None or timestamp > last_processed_timestamp:
-                        new_rows.append(row)
-                except Exception as e:
-                    logger.error(f"타임스탬프 파싱 오류: {e}")
-                    continue
-            
-            if new_rows:
-                logger.info(f"새로운 행 {len(new_rows)}개 발견")
-                for row in new_rows:
-                    try:
-                        # 데이터 추출
-                        phone = row.get('연락처 / Phone Number', '')
-                        name = row.get('이름(혹은 닉네임) /  Name or nickname', '')
-                        inquiry = row.get('프리즘지점에서,', '')
-                        
-                        if not phone:
-                            logger.warning("전화번호가 없는 행 발견")
-                            continue
-                            
-                        logger.info(f"행 처리 중: {row}")
-                        logger.info(f"SMS 발송 시도: {phone}")
-                        
-                        # SMS 발송
-                        response = send_sms(phone, name, inquiry)
-                        logger.info(f"SMS 발송 결과: {response}")
-                        
-                        # Firestore에 저장
-                        doc_ref = db.collection('sheet-sync').document('latest')
-                        doc_ref.set({
-                            'timestamp': row.get('타임스탬프'),
-                            'name': name,
-                            'phone': phone,
-                            'inquiry': inquiry,
-                            'processed_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        })
-                        logger.info(f"Firestore 저장 완료: {doc_ref.id}")
-                        
-                        # 마지막 처리 타임스탬프 업데이트
-                        last_processed_timestamp = parse_timestamp(row.get('타임스탬프', ''))
-                        logger.info(f"마지막 처리 타임스탬프 업데이트: {last_processed_timestamp}")
-                        
-                    except Exception as e:
-                        logger.error(f"행 처리 중 오류 발생: {e}")
-                     
-            else:
-                logger.info("새로운 행이 없습니다.")
-                
+            time.sleep(POLLING_INTERVAL)  # 지정된 간격만큼 대기
         except Exception as e:
-            logger.error(f"폴링 중 오류 발생: {e}")
-        
-        time.sleep(2)
+            logger.error(f"시트 확인 중 오류 발생: {e}")
+            time.sleep(2)
 
 def init_google_client():
     try:
@@ -421,11 +337,12 @@ def main():
         logger.error(f"프로그램 실행 중 오류 발생: {e}")
         raise
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     # 백그라운드에서 폴링 시작
     polling_thread = threading.Thread(target=poll_sheet)
     polling_thread.daemon = True
     polling_thread.start()
     
     # Flask 서버 시작
+    logger.info("Flask 서버 시작 중...")
     app.run(host='0.0.0.0', port=8080)
