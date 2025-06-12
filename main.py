@@ -345,4 +345,4 @@ if __name__ == '__main__':
     
     # Flask 서버 시작
     logger.info("Flask 서버 시작 중...")
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=8080, debug=True)
