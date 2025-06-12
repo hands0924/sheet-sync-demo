@@ -260,116 +260,73 @@ def setup_drive_watch():
 
 # ---------- Sheet 폴링 ----------
 def poll_sheet():
-    """2초마다 Sheet를 폴링하여 변경사항을 확인합니다."""
-    global _is_polling, _last_processed_ts
+    """2초마다 시트를 확인하고 변경사항이 있으면 처리합니다."""
+    global _last_processed_ts
+    logger.info("Starting sheet polling...")
     
-    sheet_id = os.getenv('SHEET_ID')
-    if not sheet_id:
-        logger.error("환경변수 SHEET_ID 미설정")
-        return
-    
-    sheet_name = os.getenv('SHEET_NAME', 'Sheet1')
-    range_name = f"{sheet_name}!A1:Z"
-    
-    # 마지막 처리 타임스탬프 로드
-    _last_processed_ts = get_last_processed_timestamp()
-    logger.info(f"폴링 시작: sheet_id={sheet_id}, sheet_name={sheet_name}, last_ts={_last_processed_ts}")
-    
-    poll_count = 0
-    while _is_polling:
+    while True:
         try:
-            poll_count += 1
-            logger.info(f"폴링 시도 #{poll_count}")
-            
-            # Sheet 읽기
-            sheets = get_sheets_service()
-            logger.info(f"Sheet 읽기 시도: {sheet_id}, {range_name}")
-            
-            sheet_resp = sheets.spreadsheets().values().get(
-                spreadsheetId=sheet_id,
-                range=range_name
+            # 시트 읽기
+            result = service.spreadsheets().values().get(
+                spreadsheetId=SHEET_ID,
+                range=f"{SHEET_NAME}!A2:Z"
             ).execute()
             
-            values = sheet_resp.get('values', [])
-            if len(values) < 2:
-                logger.info("Sheet 데이터 없음")
+            rows = result.get('values', [])
+            if not rows:
+                logger.info("No data found in sheet")
                 time.sleep(2)
                 continue
                 
-            # 데이터 처리
-            headers = values[0]
-            data_rows = values[1:]
-            current_rows = []
+            # 마지막 처리 시간 가져오기
+            last_ts = get_last_processed_timestamp()
+            if last_ts is None:
+                # 첫 실행인 경우, 마지막 행의 타임스탬프를 저장하고 종료
+                if rows:
+                    last_row = rows[-1]
+                    if len(last_row) > 0:
+                        try:
+                            last_ts = datetime.strptime(last_row[0], "%Y-%m-%d %H:%M:%S")
+                            update_last_processed_timestamp(last_ts)
+                            logger.info(f"Initial timestamp set to: {last_ts}")
+                        except ValueError as e:
+                            logger.error(f"Error parsing initial timestamp: {e}")
+                time.sleep(2)
+                continue
             
-            logger.info(f"헤더: {headers}")
-            logger.info(f"데이터 행 수: {len(data_rows)}")
-            
-            for row in data_rows:
-                row_full = row + ['']*(len(headers) - len(row))
-                ts, *rest = row_full
-                if not ts:
-                    continue
-                row_dict = dict(zip(headers, row_full))
-                current_rows.append((ts, row_dict))
-            
-            # 새로운 행만 처리
+            # 새로운 행 처리
             new_rows = []
-            for ts, row in current_rows:
-                if _last_processed_ts is None or ts > _last_processed_ts:
-                    new_rows.append((ts, row))
+            for row in rows:
+                if len(row) > 0:
+                    try:
+                        row_ts = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+                        if row_ts > last_ts:
+                            new_rows.append(row)
+                    except ValueError as e:
+                        logger.error(f"Error parsing timestamp: {e}")
+                        continue
             
             if new_rows:
-                logger.info(f"새로운 행 발견: {len(new_rows)}개")
-                logger.debug(f"새로운 행 데이터: {json.dumps(new_rows, ensure_ascii=False, indent=2)}")
-                
-                # 가장 최근 타임스탬프 찾기
-                latest_ts = max(ts for ts, _ in new_rows)
-                logger.info(f"가장 최근 타임스탬프: {latest_ts}")
-                
-                # SMS 발송
-                for ts, row in new_rows:
-                    phone = row.get('전화번호') or row.get('Phone') or row.get("연락처 / Phone Number") or ""
-                    name = row.get('이름') or row.get('Name') or row.get("이름(혹은 닉네임) /  Name or nickname") or ''
-                    inquiry = row.get('문의 종류') or row.get('Inquiry') or row.get("프리즘지점에서,") or ''
-                    
-                    logger.info(f"행 처리 중: ts={ts}, phone={phone}, name={name}, inquiry={inquiry}")
-                    
-                    if not phone:
-                        logger.warning(f"전화번호 누락: ts={ts}")
+                logger.info(f"Found {len(new_rows)} new rows")
+                for row in new_rows:
+                    try:
+                        row_ts = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+                        if row_ts > last_ts:
+                            # SMS 전송
+                            send_sms(row)
+                            # 마지막 처리 시간 업데이트
+                            update_last_processed_timestamp(row_ts)
+                            last_ts = row_ts
+                    except ValueError as e:
+                        logger.error(f"Error processing row: {e}")
                         continue
-                        
-                    text = f"""
-                    [포용적 금융서비스, 프리즘지점]
-                    {name}님, 만사형통 프리즘 부적 이벤트에 참여해주셔서 감사합니다! 
-
-                    프리즘지점은 퀴어 당사자와 앨라이 보험설계사가 함께하는 보험 조직입니다. 모두를 위한 미래보장을 꿈꾸며, 금융의 경계를 넘어 연대합니다.
-
-                    선택해주신 {inquiry} 문의에 반가운 마음을 전하며, 유용한 소식과 답변 안내드릴 수 있도록 곧 다시 연락드리겠습니다. 고맙습니다!
-
-                    프리즘지점 드림
-                    [보험상담 및 채용문의]
-                    https://litt.ly/prism.fin
-
-                    앞으로 소식은
-                    [인스타그램] 팔로우해주세요!
-                    www.instagram.com/prism.fin"""
-                    
-                    if not send_sms(phone, text):
-                        logger.error(f"SMS 발송 실패: ts={ts}, phone={phone}")
-                
-                # 마지막 처리 타임스탬프 업데이트
-                if update_last_processed_timestamp(latest_ts):
-                    logger.info(f"타임스탬프 업데이트 성공: {latest_ts}")
-                else:
-                    logger.error(f"타임스탬프 업데이트 실패: {latest_ts}")
             else:
-                logger.info("새로운 행 없음")
-            
+                logger.debug("No new rows found")
+                
         except Exception as e:
-            logger.error(f"폴링 중 오류 발생: {e}", exc_info=True)
-        
-        logger.info(f"폴링 완료 #{poll_count}, 2초 대기")
-        time.sleep(2)  # 2초 대기
+            logger.error(f"Error in polling: {e}")
+            
+        time.sleep(2)
 
 def start_polling():
     """폴링을 시작합니다."""
