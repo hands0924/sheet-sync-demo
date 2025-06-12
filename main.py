@@ -122,7 +122,7 @@ def get_snapshot():
 
 def save_snapshot(snapshot):
     """Firestore에 스냅샷을 저장합니다."""
-    firestore_doc = os.getenv('ççFIRESTORE_DOC')
+    firestore_doc = os.getenv('FIRESTORE_DOC')
     if not firestore_doc or '/' not in firestore_doc:
         logger.error("FIRESTORE_DOC 형식 오류")
         return False
