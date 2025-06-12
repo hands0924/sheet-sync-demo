@@ -47,22 +47,19 @@ def home():
 
 def get_firestore_client():
     try:
-        sa_key_b64 = os.getenv('GCP_SA_KEY_B64')
-        if not sa_key_b64:
-            raise ValueError("GCP_SA_KEY_B64 환경 변수가 설정되지 않았습니다.")
+        sa_key = os.getenv('GCP_SA_KEY')
+        if not sa_key:
+            raise ValueError("GCP_SA_KEY 환경 변수가 설정되지 않았습니다.")
         
-        # base64 디코딩
-        sa_key_json = base64.b64decode(sa_key_b64).decode('utf-8')
-        credentials_dict = json.loads(sa_key_json)
-        
+        credentials_dict = json.loads(sa_key)
         credentials = service_account.Credentials.from_service_account_info(
             credentials_dict,
             scopes=['https://www.googleapis.com/auth/cloud-platform']
         )
         db = firestore.Client(
-            project='prism-fin',
+            project='prism-fin',  # 하드코딩된 프로젝트 ID
             credentials=credentials,
-            database='sheet-sync'  # 데이터베이스 이름 지정
+            database='sheet-sync'  # 하드코딩된 데이터베이스 이름
         )
         logger.info("Firestore 클라이언트 초기화 성공")
         return db
