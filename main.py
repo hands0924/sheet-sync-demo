@@ -15,6 +15,7 @@ from flask import Flask, jsonify
 import threading
 import pytz
 import uuid
+import httplib2
 
 # 로깅 설정
 logging.basicConfig(
@@ -53,27 +54,27 @@ def home():
     return "Hello, World!"
 
 def get_firestore_client():
-    """Firestore 클라이언트를 초기화하고 반환합니다."""
+    """Firestore 클라이언트를 초기화합니다."""
     global firestore_client
     if firestore_client is None:
         try:
             firestore_client = firestore.Client(
-                project='prism-fin',  # 하드코딩된 프로젝트 ID
-                database='sheet-sync'  # 하드코딩된 데이터베이스 이름
+                project='prism-fin',
+                database='sheet-sync'
             )
-            logger.info("Firestore 클라이언트 초기화 성공")
+            logger.info("Firestore 클라이언트 초기화 완료")
         except Exception as e:
             logger.error(f"Firestore 클라이언트 초기화 실패: {e}")
             raise
     return firestore_client
 
 def get_sheets_service():
-    """Google Sheets API 서비스를 초기화하고 반환합니다."""
+    """Google Sheets API 서비스를 초기화합니다."""
     global sheets_service
     if sheets_service is None:
         try:
             sheets_service = build('sheets', 'v4')
-            logger.info("Google Sheets API 서비스 초기화 성공")
+            logger.info("Google Sheets API 서비스 초기화 완료")
         except Exception as e:
             logger.error(f"Google Sheets API 서비스 초기화 실패: {e}")
             raise
@@ -124,16 +125,29 @@ def send_sms(phone, name, inquiry):
         
         logger.info(f"SMS 전송 요청 데이터: {message.__dict__}")
         
+        # SMS 전송 및 응답 대기
         response = message_service.send(message)
         logger.info(f"SMS 발송 결과: {response}")
-        logger.info(f"Group ID: {response.group_info.group_id}")
-        logger.info(f"요청한 메시지 개수: {response.group_info.count.total}")
-        logger.info(f"성공한 메시지 개수: {response.group_info.count.registered_success}")
-        logger.info(f"실패한 메시지 개수: {response.group_info.count.registered_failed}")
-        return response
+        
+        # 전송 상태 확인
+        if response and hasattr(response, 'group_info'):
+            logger.info(f"Group ID: {response.group_info.group_id}")
+            logger.info(f"요청한 메시지 개수: {response.group_info.count.total}")
+            logger.info(f"성공한 메시지 개수: {response.group_info.count.registered_success}")
+            logger.info(f"실패한 메시지 개수: {response.group_info.count.registered_failed}")
+            
+            # 전송 실패 시 예외 발생
+            if response.group_info.count.registered_failed > 0:
+                raise Exception(f"SMS 전송 실패: {response.group_info.count.registered_failed}건 실패")
+            
+            logger.info(f"SMS 전송 완료 - 수신자: {name}, 전화번호: {phone}")
+            return True
+        else:
+            raise Exception("SMS 전송 응답이 올바르지 않습니다")
+            
     except Exception as e:
         logger.error(f"SMS 발송 실패: {e}")
-        return None
+        return False
 
 def poll_sheet():
     """Google Sheets 데이터를 폴링하고 Firestore에 저장합니다."""
