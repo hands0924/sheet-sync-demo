@@ -9,6 +9,7 @@ env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   SERVICE_NAME: ${{ secrets.SERVICE_NAME }}
   REGION: ${{ secrets.GCP_REGION }}
+  IMAGE_TAG: ${{ secrets.IMAGE_TAG }}
 
 jobs:
   deploy:
@@ -35,16 +36,16 @@ jobs:
 
     - name: Build and push container
       run: |
-        echo "Building image: gcr.io/$PROJECT_ID/$SERVICE_NAME:${{ github.sha }}"
-        docker build -t gcr.io/$PROJECT_ID/$SERVICE_NAME:${{ github.sha }} .
-        docker push gcr.io/$PROJECT_ID/$SERVICE_NAME:${{ github.sha }}
+        echo "Building image: gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG"
+        docker build -t gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG .
+        docker push gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG
 
     - name: Deploy to Cloud Run
       uses: google-github-actions/deploy-cloudrun@v2
       with:
         service: $SERVICE_NAME
         region: $REGION
-        image: gcr.io/$PROJECT_ID/$SERVICE_NAME:${{ github.sha }}
+        image: gcr.io/$PROJECT_ID/$SERVICE_NAME:$IMAGE_TAG
         flags: '--allow-unauthenticated'
         env_vars: |
           SPREADSHEET_ID=${{ secrets.SPREADSHEET_ID }}
