@@ -50,6 +50,7 @@ def get_firestore_client():
         if not sa_key:
             raise ValueError("GCP_SA_KEY 환경 변수가 설정되지 않았습니다.")
         
+        # JSON 형식으로 파싱
         credentials_dict = json.loads(sa_key)
         credentials = service_account.Credentials.from_service_account_info(
             credentials_dict,
