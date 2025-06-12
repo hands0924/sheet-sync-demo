@@ -267,6 +267,10 @@ def poll_sheet():
     # Sheets API 서비스 객체 생성
     service = get_sheets_service()
 
+    # 환경 변수에서 SHEET_ID와 SHEET_NAME 가져오기
+    SHEET_ID = os.getenv('SHEET_ID')
+    SHEET_NAME = os.getenv('SHEET_NAME', 'Sheet1')
+
     while True:
         try:
             # 시트 읽기
