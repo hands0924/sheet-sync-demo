@@ -1,0 +1,28 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/sheet-sync', '.']
+
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/sheet-sync']
+
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'sheet-sync'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/sheet-sync'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'SPREADSHEET_ID=${_SPREADSHEET_ID},SHEET_NAME=${_SHEET_NAME},SOLAPI_API_KEY=${_SOLAPI_API_KEY},SOLAPI_API_SECRET=${_SOLAPI_API_SECRET},SOLAPI_SENDER=${_SOLAPI_SENDER},GOOGLE_CREDENTIALS=${_GOOGLE_CREDENTIALS}'
+
+images:
+  - 'gcr.io/$PROJECT_ID/sheet-sync' 
