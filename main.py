@@ -159,12 +159,15 @@ def poll_sheet():
         
         logger.info(f"스프레드시트 확인 중: ID={spreadsheet_id}, 시트={sheet_name}")
         
-        # 마지막으로 처리된 타임스탬프를 Firestore에서 가져옵니다
+        # 마지막으로 처리된 정보를 Firestore에서 가져옵니다
         last_processed_ref = db.collection('metadata').document('last_processed')
         last_processed_doc = last_processed_ref.get()
-        last_processed_timestamp = last_processed_doc.get('timestamp') if last_processed_doc.exists else None
+        last_processed = {
+            'timestamp': last_processed_doc.get('timestamp') if last_processed_doc.exists else None,
+            'row_number': last_processed_doc.get('row_number') if last_processed_doc.exists and 'row_number' in last_processed_doc.to_dict() else 0
+        }
         
-        logger.info(f"마지막으로 처리된 타임스탬프: {last_processed_timestamp}")
+        logger.info(f"마지막으로 처리된 정보: 타임스탬프={last_processed['timestamp']}, 행 번호={last_processed['row_number']}")
         
         # Google Sheets API를 사용하여 데이터를 가져옵니다.
         logger.info("Google Sheets API 호출 시작")
@@ -199,12 +202,15 @@ def poll_sheet():
         
         # 새로운 데이터만 처리
         new_rows = []
-        for row in data_rows:
+        for i, row in enumerate(data_rows, start=2):  # 2부터 시작 (헤더가 1행)
             if len(row) > max(phone_idx, name_idx):  # 필요한 컬럼이 모두 있는지 확인
                 try:
                     row_timestamp = parse_korean_datetime(row[0])
-                    if last_processed_timestamp is None or row_timestamp > last_processed_timestamp:
-                        new_rows.append((row, row_timestamp))
+                    # 타임스탬프가 같거나 더 크고, 행 번호가 더 큰 경우에만 처리
+                    if (last_processed['timestamp'] is None or 
+                        row_timestamp > last_processed['timestamp'] or 
+                        (row_timestamp == last_processed['timestamp'] and i > last_processed['row_number'])):
+                        new_rows.append((row, row_timestamp, i))
                 except ValueError as e:
                     logger.warning(f"타임스탬프 파싱 실패: {row[0]}, {e}")
                     continue
@@ -216,8 +222,8 @@ def poll_sheet():
         logger.info(f"새로운 데이터 {len(new_rows)}행 발견")
         
         # 데이터를 Firestore에 저장하고 SMS 전송
-        latest_timestamp = None
-        for row, row_timestamp in new_rows:
+        latest_processed = {'timestamp': None, 'row_number': 0}
+        for row, row_timestamp, row_number in new_rows:
             try:
                 # Firestore에 저장
                 doc_ref = db.collection('sheet_data').document()
@@ -225,27 +231,34 @@ def poll_sheet():
                     'timestamp': row[0],
                     'phone': row[phone_idx],
                     'name': row[name_idx],
+                    'row_number': row_number,
                     'processed_at': firestore.SERVER_TIMESTAMP
                 })
-                logger.info(f"행 처리 완료: {row[0]}, {row[name_idx]}")
+                logger.info(f"행 처리 완료: {row[0]}, {row[name_idx]}, 행 번호: {row_number}")
                 
                 # SMS 전송 시도
                 logger.info(f"SMS 전송 시도: {row[name_idx]}")
                 send_sms(row[phone_idx], row[name_idx], '프리즘지점에서,')
                 logger.info(f"SMS 전송 성공: {row[name_idx]}")
                 
-                latest_timestamp = row_timestamp
+                # 마지막 처리 정보 업데이트
+                if (latest_processed['timestamp'] is None or 
+                    row_timestamp > latest_processed['timestamp'] or 
+                    (row_timestamp == latest_processed['timestamp'] and row_number > latest_processed['row_number'])):
+                    latest_processed = {'timestamp': row_timestamp, 'row_number': row_number}
+                
             except Exception as e:
                 logger.error(f"행 처리 중 오류 발생: {row}, 오류: {e}")
                 continue
         
-        # 마지막으로 처리된 타임스탬프 업데이트
-        if latest_timestamp:
+        # 마지막으로 처리된 정보 업데이트
+        if latest_processed['timestamp']:
             last_processed_ref.set({
-                'timestamp': latest_timestamp,
+                'timestamp': latest_processed['timestamp'],
+                'row_number': latest_processed['row_number'],
                 'last_updated': firestore.SERVER_TIMESTAMP
             })
-            logger.info(f"마지막 처리 타임스탬프 업데이트: {latest_timestamp}")
+            logger.info(f"마지막 처리 정보 업데이트: 타임스탬프={latest_processed['timestamp']}, 행 번호={latest_processed['row_number']}")
         
         logger.info(f"데이터 처리 완료. 총 {len(new_rows)}개의 새로운 행이 처리되었습니다.")
         
