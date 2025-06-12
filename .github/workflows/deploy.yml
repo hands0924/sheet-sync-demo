@@ -37,4 +37,4 @@ jobs:
           --region ${{ env.REGION }} \
           --source . \
           --allow-unauthenticated \
-          --env-vars="SPREADSHEET_ID=${{ secrets.SPREADSHEET_ID }},SHEET_NAME=${{ secrets.SHEET_NAME }},POLLING_INTERVAL=1,SOLAPI_SENDER=${{ secrets.SOLAPI_SENDER }},SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }},SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }}"
+          --set-env-vars="SPREADSHEET_ID=${{ secrets.SPREADSHEET_ID }},SHEET_NAME=${{ secrets.SHEET_NAME }},POLLING_INTERVAL=1,SOLAPI_SENDER=${{ secrets.SOLAPI_SENDER }},SOLAPI_API_KEY=${{ secrets.SOLAPI_API_KEY }},SOLAPI_API_SECRET=${{ secrets.SOLAPI_API_SECRET }}"
