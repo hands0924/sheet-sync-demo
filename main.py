@@ -1,7 +1,10 @@
 import os
 import re
 import logging
+import time
 from flask import Request, abort
+from threading import Thread
+from datetime import datetime, timezone
 
 from google.cloud import firestore
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -20,6 +23,10 @@ logger = logging.getLogger(__name__)
 _firestore_client = None
 _sheets_service = None
 _message_service = None
+_drive_service = None
+_polling_thread = None
+_is_polling = False
+_last_processed_ts = None
 
 # ---------- Firestore 클라이언트 ----------
 def get_firestore_client():
@@ -53,6 +60,19 @@ def get_sheets_service():
         _sheets_service = build('sheets', 'v4', credentials=creds)
         logger.info("Initialized Sheets service")
     return _sheets_service
+
+# ---------- Drive API 서비스 ----------
+def get_drive_service():
+    global _drive_service
+    if _drive_service is None:
+        creds, _ = google_auth_default(scopes=[
+            'https://www.googleapis.com/auth/drive.readonly'
+        ])
+        if not creds.valid:
+            creds.refresh(GoogleAuthRequest())
+        _drive_service = build('drive', 'v3', credentials=creds)
+        logger.info("Initialized Drive service")
+    return _drive_service
 
 # ---------- Solapi SDK 메시지 서비스 ----------
 def get_message_service():
@@ -103,26 +123,35 @@ def send_sms(to_phone: str, text: str) -> bool:
         return False
 
 # ---------- Firestore 스냅샷 관리 ----------
-def get_snapshot():
-    """Firestore에서 스냅샷을 가져옵니다."""
-    firestore_doc = os.getenv('FIRESTORE_DOC')
-    if not firestore_doc or '/' not in firestore_doc:
-        logger.error("FIRESTORE_DOC 형식 오류")
-        return {}
+def get_last_processed_timestamp():
+    """마지막으로 처리된 타임스탬프를 가져옵니다."""
+    global _last_processed_ts
     
-    col, doc_id = firestore_doc.split('/', 1)
-    db = get_firestore_client()
-    doc_ref = db.collection(col).document(doc_id)
+    if _last_processed_ts is None:
+        firestore_doc = os.getenv('FIRESTORE_DOC')
+        if not firestore_doc or '/' not in firestore_doc:
+            logger.error("FIRESTORE_DOC 형식 오류")
+            return None
+        
+        col, doc_id = firestore_doc.split('/', 1)
+        db = get_firestore_client()
+        doc_ref = db.collection(col).document(doc_id)
+        
+        try:
+            doc = doc_ref.get()
+            if doc.exists:
+                data = doc.to_dict()
+                _last_processed_ts = data.get('last_processed_ts')
+                logger.info(f"마지막 처리 타임스탬프 로드: {_last_processed_ts}")
+        except Exception as e:
+            logger.error(f"마지막 처리 타임스탬프 로드 실패: {e}")
     
-    try:
-        doc = doc_ref.get()
-        return doc.to_dict() if doc.exists else {}
-    except Exception as e:
-        logger.error(f"스냅샷 로드 실패: {e}")
-        return {}
+    return _last_processed_ts
 
-def save_snapshot(snapshot):
-    """Firestore에 스냅샷을 저장합니다."""
+def update_last_processed_timestamp(timestamp):
+    """마지막으로 처리된 타임스탬프를 업데이트합니다."""
+    global _last_processed_ts
+    
     firestore_doc = os.getenv('FIRESTORE_DOC')
     if not firestore_doc or '/' not in firestore_doc:
         logger.error("FIRESTORE_DOC 형식 오류")
@@ -133,30 +162,184 @@ def save_snapshot(snapshot):
     doc_ref = db.collection(col).document(doc_id)
     
     try:
-        doc_ref.set(snapshot)
-        logger.info("스냅샷 저장 성공")
+        doc_ref.set({
+            'last_processed_ts': timestamp,
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        })
+        _last_processed_ts = timestamp
+        logger.info(f"마지막 처리 타임스탬프 업데이트: {timestamp}")
         return True
     except Exception as e:
-        logger.error(f"스냅샷 저장 실패: {e}")
+        logger.error(f"마지막 처리 타임스탬프 업데이트 실패: {e}")
         return False
+
+# ---------- Drive Watch 설정 ----------
+def setup_drive_watch():
+    """Drive Watch를 설정합니다."""
+    sheet_id = os.getenv('SHEET_ID')
+    if not sheet_id:
+        logger.error("환경변수 SHEET_ID 미설정")
+        return False
+    
+    drive = get_drive_service()
+    cloud_function_url = os.getenv('CLOUD_FUNCTION_URL')
+    if not cloud_function_url:
+        logger.error("환경변수 CLOUD_FUNCTION_URL 미설정")
+        return False
+    
+    try:
+        # 기존 watch 채널 제거
+        try:
+            drive.channels().stop(body={
+                'id': 'sheet-sync-channel',
+                'resourceId': f'sheet-{sheet_id}'
+            }).execute()
+        except Exception:
+            pass  # 기존 채널이 없는 경우 무시
+        
+        # 새로운 watch 채널 설정
+        channel = drive.files().watch(
+            fileId=sheet_id,
+            body={
+                'id': 'sheet-sync-channel',
+                'type': 'web_hook',
+                'address': cloud_function_url,
+                'expiration': int((time.time() + 7 * 24 * 60 * 60) * 1000),  # 7일
+                'payload': True
+            }
+        ).execute()
+        
+        logger.info(f"Drive Watch 설정 성공: channel_id={channel.get('id')}")
+        return True
+    except Exception as e:
+        logger.error(f"Drive Watch 설정 실패: {e}")
+        return False
+
+# ---------- Sheet 폴링 ----------
+def poll_sheet():
+    """2초마다 Sheet를 폴링하여 변경사항을 확인합니다."""
+    global _is_polling, _last_processed_ts
+    
+    sheet_id = os.getenv('SHEET_ID')
+    if not sheet_id:
+        logger.error("환경변수 SHEET_ID 미설정")
+        return
+    
+    sheet_name = os.getenv('SHEET_NAME', 'Sheet1')
+    range_name = f"{sheet_name}!A1:Z"
+    
+    # 마지막 처리 타임스탬프 로드
+    _last_processed_ts = get_last_processed_timestamp()
+    
+    while _is_polling:
+        try:
+            # Sheet 읽기
+            sheets = get_sheets_service()
+            sheet_resp = sheets.spreadsheets().values().get(
+                spreadsheetId=sheet_id,
+                range=range_name
+            ).execute()
+            
+            values = sheet_resp.get('values', [])
+            if len(values) < 2:
+                time.sleep(2)
+                continue
+                
+            # 데이터 처리
+            headers = values[0]
+            data_rows = values[1:]
+            current_rows = []
+            for row in data_rows:
+                row_full = row + ['']*(len(headers) - len(row))
+                ts, *rest = row_full
+                if not ts:
+                    continue
+                row_dict = dict(zip(headers, row_full))
+                current_rows.append((ts, row_dict))
+            
+            # 새로운 행만 처리
+            new_rows = []
+            for ts, row in current_rows:
+                if _last_processed_ts is None or ts > _last_processed_ts:
+                    new_rows.append((ts, row))
+            
+            if new_rows:
+                # 가장 최근 타임스탬프 찾기
+                latest_ts = max(ts for ts, _ in new_rows)
+                
+                # SMS 발송
+                for ts, row in new_rows:
+                    phone = row.get('전화번호') or row.get('Phone') or ''
+                    name = row.get('이름') or row.get('Name') or ''
+                    inquiry = row.get('문의 종류') or row.get('Inquiry') or ''
+                    if not phone:
+                        logger.warning(f"전화번호 누락: ts={ts}")
+                        continue
+                    text = f"[알림]\n{name}님, '{inquiry}' 문의가 접수되었습니다. 감사합니다."
+                    if not send_sms(phone, text):
+                        logger.error(f"SMS 발송 실패: ts={ts}, phone={phone}")
+                
+                # 마지막 처리 타임스탬프 업데이트
+                update_last_processed_timestamp(latest_ts)
+            
+        except Exception as e:
+            logger.error(f"폴링 중 오류 발생: {e}")
+        
+        time.sleep(2)  # 2초 대기
+
+def start_polling():
+    """폴링을 시작합니다."""
+    global _polling_thread, _is_polling
+    
+    if _polling_thread is None or not _polling_thread.is_alive():
+        _is_polling = True
+        _polling_thread = Thread(target=poll_sheet, daemon=True)
+        _polling_thread.start()
+        logger.info("Sheet 폴링 시작")
+
+def stop_polling():
+    """폴링을 중지합니다."""
+    global _is_polling
+    
+    _is_polling = False
+    if _polling_thread and _polling_thread.is_alive():
+        _polling_thread.join(timeout=5)
+    logger.info("Sheet 폴링 중지")
 
 # ---------- Cloud Function 엔트리포인트 ----------
 def sheet_webhook(request: Request):
     # 1) 메서드 검증
     if request.method != 'POST':
         return ('Method Not Allowed', 405)
-    if not request.headers.get('X-Goog-Resource-State'):
+    
+    # 2) 요청 처리
+    try:
+        data = request.get_json()
+        if data and data.get('action') == 'start_polling':
+            start_polling()
+            return ('Polling started', 200)
+        elif data and data.get('action') == 'stop_polling':
+            stop_polling()
+            return ('Polling stopped', 200)
+    except Exception:
+        pass
+    
+    # 3) 기존 webhook 처리
+    resource_state = request.headers.get('X-Goog-Resource-State')
+    if not resource_state:
         logger.warning("Invalid webhook: Missing X-Goog-Resource-State")
         abort(400, description="Invalid webhook call")
-
-    # 2) Sheet 읽기
+    
+    # Sheet 읽기 및 처리
     sheet_id = os.getenv('SHEET_ID')
     if not sheet_id:
         logger.error("환경변수 SHEET_ID 미설정")
         abort(500, description="Server configuration error")
+    
     sheets = get_sheets_service()
     sheet_name = os.getenv('SHEET_NAME', 'Sheet1')
     range_name = f"{sheet_name}!A1:Z"
+    
     try:
         sheet_resp = sheets.spreadsheets().values().get(
             spreadsheetId=sheet_id,
@@ -181,30 +364,32 @@ def sheet_webhook(request: Request):
             row_dict = dict(zip(headers, row_full))
             current_rows.append((ts, row_dict))
 
-    # 3) 이전 스냅샷 로드
-    prev = get_snapshot()
-
-    # 4) 변경 감지
-    new_or_updated = []
+    # 마지막 처리 타임스탬프 확인
+    last_ts = get_last_processed_timestamp()
+    
+    # 새로운 행만 처리
+    new_rows = []
     for ts, row in current_rows:
-        if ts not in prev or prev.get(ts) != row:
-            new_or_updated.append((ts, row))
-
-    # 5) SMS 발송
-    for ts, row in new_or_updated:
-        phone = row.get('전화번호') or row.get('Phone') or ''
-        name = row.get('이름') or row.get('Name') or ''
-        inquiry = row.get('문의 종류') or row.get('Inquiry') or ''
-        if not phone:
-            logger.warning(f"전화번호 누락: ts={ts}")
-            continue
-        text = f"[알림]\n{name}님, '{inquiry}' 문의가 접수되었습니다. 감사합니다."
-        if not send_sms(phone, text):
-            logger.error(f"SMS 발송 실패: ts={ts}, phone={phone}")
-
-    # 6) 스냅샷 저장
-    snapshot = {ts: row for ts, row in current_rows}
-    if not save_snapshot(snapshot):
-        logger.error("스냅샷 저장 실패")
+        if last_ts is None or ts > last_ts:
+            new_rows.append((ts, row))
+    
+    if new_rows:
+        # 가장 최근 타임스탬프 찾기
+        latest_ts = max(ts for ts, _ in new_rows)
+        
+        # SMS 발송
+        for ts, row in new_rows:
+            phone = row.get('전화번호') or row.get('Phone') or ''
+            name = row.get('이름') or row.get('Name') or ''
+            inquiry = row.get('문의 종류') or row.get('Inquiry') or ''
+            if not phone:
+                logger.warning(f"전화번호 누락: ts={ts}")
+                continue
+            text = f"[알림]\n{name}님, '{inquiry}' 문의가 접수되었습니다. 감사합니다."
+            if not send_sms(phone, text):
+                logger.error(f"SMS 발송 실패: ts={ts}, phone={phone}")
+        
+        # 마지막 처리 타임스탬프 업데이트
+        update_last_processed_timestamp(latest_ts)
 
     return ('OK', 200)
