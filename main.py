@@ -294,7 +294,7 @@ def poll_sheet():
     """2초마다 시트를 확인하고 변경사항이 있으면 처리합니다."""
     global _last_processed_ts
     logger.info("Starting sheet polling...")
-    
+
     # Sheets API 서비스 객체 생성
     service = get_sheets_service()
 
@@ -302,6 +302,8 @@ def poll_sheet():
     SHEET_ID = os.getenv('SHEET_ID')
     SHEET_NAME = os.getenv('SHEET_NAME', 'Sheet1')
 
+    # 초기 데이터 로드 및 저장
+    initial_load = True
     while True:
         try:
             # 시트 읽기
@@ -318,18 +320,30 @@ def poll_sheet():
                 
             # 마지막 처리 시간 가져오기
             last_ts = get_last_processed_timestamp()
-            if last_ts is None:
-                # 첫 실행인 경우, 마지막 행의 타임스탬프를 저장하고 종료
+            
+            if initial_load:
+                logger.info("Performing initial data load...")
                 if rows:
-                    last_row = rows[-1]
-                    if len(last_row) > 0:
-                        try:
-                            last_ts = parse_timestamp(last_row[0])
-                            update_last_processed_timestamp(last_ts)
-                            logger.info(f"Initial timestamp set to: {last_ts}")
-                        except ValueError as e:
-                            logger.error(f"Error parsing initial timestamp: {e}")
-                time.sleep(2)
+                    # 모든 행을 처리하고 가장 최근 타임스탬프 저장
+                    latest_ts = None
+                    for row in rows:
+                        if len(row) > 0:
+                            try:
+                                row_ts = parse_timestamp(row[0])
+                                if latest_ts is None or row_ts > latest_ts:
+                                    latest_ts = row_ts
+                            except ValueError as e:
+                                logger.error(f"Error parsing timestamp in initial load: {e}")
+                                continue
+                    
+                    if latest_ts:
+                        update_last_processed_timestamp(latest_ts)
+                        logger.info(f"Initial data load complete. Latest timestamp: {latest_ts}")
+                    else:
+                        logger.warning("No valid timestamps found in initial data")
+                
+                initial_load = False
+                last_ts = get_last_processed_timestamp()
                 continue
             
             # 새로운 행 처리
@@ -350,8 +364,37 @@ def poll_sheet():
                     try:
                         row_ts = parse_timestamp(row[0])
                         if row_ts > last_ts:
+                            # SMS 전송을 위한 데이터 준비
+                            phone = row[1] if len(row) > 1 else ""  # 전화번호는 두 번째 열
+                            name = row[2] if len(row) > 2 else ""   # 이름은 세 번째 열
+                            inquiry = row[3] if len(row) > 3 else ""  # 문의 종류는 네 번째 열
+                            
+                            if not phone:
+                                logger.warning(f"전화번호 누락: ts={row_ts}")
+                                continue
+                                
+                            text = f"""
+                            [포용적 금융서비스, 프리즘지점]
+                            {name}님, 만사형통 프리즘 부적 이벤트에 참여해주셔서 감사합니다! 
+
+                            프리즘지점은 퀴어 당사자와 앨라이 보험설계사가 함께하는 보험 조직입니다. 모두를 위한 미래보장을 꿈꾸며, 금융의 경계를 넘어 연대합니다.
+
+                            선택해주신 {inquiry} 문의에 반가운 마음을 전하며, 유용한 소식과 답변 안내드릴 수 있도록 곧 다시 연락드리겠습니다. 고맙습니다!
+
+                            프리즘지점 드림
+                            [보험상담 및 채용문의]
+                            https://litt.ly/prism.fin
+
+                            앞으로 소식은
+                            [인스타그램] 팔로우해주세요!
+                            www.instagram.com/prism.fin"""
+                            
                             # SMS 전송
-                            send_sms(row)
+                            if send_sms(phone, text):
+                                logger.info(f"SMS 전송 성공: ts={row_ts}, phone={phone}")
+                            else:
+                                logger.error(f"SMS 전송 실패: ts={row_ts}, phone={phone}")
+                            
                             # 마지막 처리 시간 업데이트
                             update_last_processed_timestamp(row_ts)
                             last_ts = row_ts
