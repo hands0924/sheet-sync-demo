@@ -5,7 +5,7 @@ import time
 import json
 from flask import Request, abort
 from threading import Thread
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from google.cloud import firestore
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -282,9 +282,10 @@ def parse_timestamp(ts_str):
             time_str = ' '.join(ts_str.split()[3:])
             ts_str = f"{date_str} {time_str}"
         
-        # datetime 객체 생성 및 타임존 정보 추가
+        # datetime 객체 생성 및 KST 타임존 정보 추가
         dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-        return dt.replace(tzinfo=timezone.utc)
+        kst = timezone(timedelta(hours=9))  # KST는 UTC+9
+        return dt.replace(tzinfo=kst)
     except Exception as e:
         logger.error(f"Error parsing timestamp '{ts_str}': {e}")
         raise
