@@ -282,7 +282,9 @@ def parse_timestamp(ts_str):
             time_str = ' '.join(ts_str.split()[3:])
             ts_str = f"{date_str} {time_str}"
         
-        return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+        # datetime 객체 생성 및 타임존 정보 추가
+        dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+        return dt.replace(tzinfo=timezone.utc)
     except Exception as e:
         logger.error(f"Error parsing timestamp '{ts_str}': {e}")
         raise
