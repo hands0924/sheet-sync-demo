@@ -264,6 +264,9 @@ def poll_sheet():
     global _last_processed_ts
     logger.info("Starting sheet polling...")
     
+    # Sheets API 서비스 객체 생성
+    service = get_sheets_service()
+
     while True:
         try:
             # 시트 읽기
